@@ -77,17 +77,15 @@ a { color: var(--acento-tinta); }
   white-space: nowrap;
 }
 .logo {
-  width: 36px; height: 36px;
-  border-radius: 6px;
-  border: 1.5px solid var(--acento);
-  color: var(--acento);
+  width: 40px; height: 40px;
   display: grid; place-items: center;
   flex: none;
 }
-.logo svg { width: 22px; height: 22px; }
+.logo img { width: 100%; height: 100%; object-fit: contain; display: block; }
 
 main { max-width: 1040px; margin: 0 auto; padding: 20px 16px; }
 .pilha { display: grid; gap: 16px; }
+.pilha > * { min-width: 0; }
 
 .ico-linha {
   width: 20px; height: 20px;
@@ -545,13 +543,9 @@ table.simples td:last-child { font-weight: 500; }
 .tela-login { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; }
 .tela-login .cartao { width: 100%; max-width: 400px; padding: 28px 24px; }
 .tela-login .logo {
-  width: 48px; height: 48px;
-  border: 0;
-  background: var(--acento);
-  color: #ffffff;
+  width: 64px; height: 64px;
   margin-bottom: 18px;
 }
-.tela-login .logo svg { width: 28px; height: 28px; }
 .tela-login h1 { font-size: 1.35rem; margin-bottom: 4px; }
 .tela-login p.ajuda { color: var(--tinta-3); margin: 0 0 22px; font-size: .92rem; }
 

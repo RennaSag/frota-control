@@ -74,9 +74,7 @@ const TRACOS = {
 };
 const svg = (nome) => `<svg class="ico-linha" viewBox="0 0 24 24" aria-hidden="true">${TRACOS[nome]}</svg>`;
 
-const LOGO = `<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2"
-  stroke-linejoin="round" aria-hidden="true"><path d="M3 21h15V9H3zm15 0h4m4 0h3v-6l-3-4h-8"/>
-  <circle cx="9" cy="22.5" r="2.5"/><circle cx="24" cy="22.5" r="2.5"/></svg>`;
+const LOGO = '<img src="assets/logo.png" alt="" width="192" height="192">';
 
 function endereco(rota, params = {}) {
   const p = new URLSearchParams({ r: rota });
