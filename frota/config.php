@@ -12,8 +12,13 @@ function conf(string $nome, string $padrao): string
     return ($valor === false || $valor === '') ? $padrao : $valor;
 }
 
-// 'mysql' (padrão do XAMPP) ou 'sqlite' (banco em arquivo, sem precisar ligar o MySQL)
-define('BANCO', conf('BANCO', 'mysql'));
+// --- PostgreSQL (Neon, Render etc.): endereço completo no formato
+//     postgresql://usuario:senha@servidor/banco?sslmode=require
+define('PG_URL', (string) (getenv('DATABASE_URL') ?: conf('PG_URL', '')));
+
+// 'mysql' (padrão do XAMPP), 'sqlite' (banco em arquivo, sem precisar ligar o MySQL)
+// ou 'pgsql' (PostgreSQL). Se existir a variável DATABASE_URL, o padrão vira 'pgsql'.
+define('BANCO', conf('BANCO', PG_URL !== '' ? 'pgsql' : 'mysql'));
 
 // --- Dados do MySQL (painel do XAMPP: usuário "root" e senha em branco) ---
 define('MYSQL_HOST', conf('MYSQL_HOST', '127.0.0.1'));
@@ -28,7 +33,7 @@ define('SQLITE_ARQUIVO', conf('SQLITE_ARQUIVO', __DIR__ . '/dados/frota.sqlite')
 // --- Administrador criado automaticamente no primeiro acesso ---
 define('ADMIN_NOME', 'Proprietário');
 define('ADMIN_USUARIO', 'admin');
-define('ADMIN_SENHA', 'admin123');
+define('ADMIN_SENHA', conf('ADMIN_SENHA', 'admin123'));
 
 // Nome que aparece no topo do site e no ícone do celular
 define('NOME_SISTEMA', 'Controle da Frota');

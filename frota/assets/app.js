@@ -470,6 +470,25 @@ function camposLancamento(tipo, l = {}) {
     </div>`;
 }
 
+/** Reduz fotos grandes antes de enviar: para ler uma nota bastam 1600 px. */
+async function reduzFoto(arquivo) {
+  if (!/^image\/(jpeg|png|webp)$/.test(arquivo.type) || arquivo.size < 400 * 1024) return arquivo;
+  try {
+    const imagem = await createImageBitmap(arquivo);
+    const escala = Math.min(1, 1600 / Math.max(imagem.width, imagem.height));
+    const tela = document.createElement('canvas');
+    tela.width = Math.round(imagem.width * escala);
+    tela.height = Math.round(imagem.height * escala);
+    tela.getContext('2d').drawImage(imagem, 0, 0, tela.width, tela.height);
+    const blob = await new Promise((pronto) => tela.toBlob(pronto, 'image/jpeg', 0.8));
+    return blob && blob.size < arquivo.size
+      ? new File([blob], 'comprovante.jpg', { type: 'image/jpeg' })
+      : arquivo;
+  } catch {
+    return arquivo;
+  }
+}
+
 function ligaCamposLancamento(form) {
   const campoCategoria = form.elements.categoria_id;
   const blocoLitros = form.querySelector('[data-se="litros"]');
@@ -515,15 +534,16 @@ function ligaCamposLancamento(form) {
 
   const campoFoto = form.querySelector('#c-foto');
   campoFoto.addEventListener('change', async () => {
-    const arquivo = campoFoto.files?.[0];
-    if (!arquivo) return;
+    if (!campoFoto.files?.[0]) return;
+    avisoFoto.textContent = 'Enviando foto…';
+    avisoFoto.classList.remove('oculto');
+    const arquivo = await reduzFoto(campoFoto.files[0]);
     if (arquivo.size > 8 * 1024 * 1024) {
+      avisoFoto.classList.add('oculto');
       mostraErro(form, 'A foto é muito grande (máximo 8 MB).');
       campoFoto.value = '';
       return;
     }
-    avisoFoto.textContent = 'Enviando foto…';
-    avisoFoto.classList.remove('oculto');
     try {
       const corpo = new FormData();
       corpo.append('foto', arquivo);

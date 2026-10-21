@@ -492,7 +492,8 @@ function filtrosLancamento(): array
     }
     $busca = campoTexto($_GET['busca'] ?? null, 'Busca', false, 60);
     if ($busca !== null) {
-        $cond[] = '(l.descricao LIKE ? OR l.observacao LIKE ? OR l.lugar LIKE ? OR l.cliente LIKE ?)';
+        $like = BANCO === 'pgsql' ? 'ILIKE' : 'LIKE'; // no PostgreSQL o LIKE diferencia maiúsculas
+        $cond[] = "(l.descricao $like ? OR l.observacao $like ? OR l.lugar $like ? OR l.cliente $like ?)";
         for ($i = 0; $i < 4; $i++) {
             $args[] = '%' . $busca . '%';
         }
@@ -621,10 +622,7 @@ function rotaExcluiLancamento(int $id): array
     }
     consulta('DELETE FROM lancamentos WHERE id = ?', [$id]);
     if (!empty($atual['comprovante']) && preg_match('/^[A-Za-z0-9._-]+$/', $atual['comprovante'])) {
-        $caminho = __DIR__ . '/../uploads/' . $atual['comprovante'];
-        if (is_file($caminho)) {
-            @unlink($caminho);
-        }
+        apagaComprovante($atual['comprovante']);
     }
     return ['ok' => true];
 }
@@ -872,6 +870,46 @@ function pastaUploads(): string
     return $pasta;
 }
 
+// No PostgreSQL as fotos ficam na tabela "comprovantes"; nos outros, na pasta uploads.
+function guardaComprovante(string $nome, string $temporario): void
+{
+    if (BANCO === 'pgsql') {
+        $arquivo = fopen($temporario, 'rb');
+        $st = banco()->prepare('INSERT INTO comprovantes (nome, dados, criado_em) VALUES (?, ?, ?)');
+        $st->bindValue(1, $nome);
+        $st->bindValue(2, $arquivo, PDO::PARAM_LOB); // bindParam trocaria $arquivo pelo conteúdo
+        $st->bindValue(3, agora());
+        $st->execute();
+        fclose($arquivo);
+        return;
+    }
+    if (!move_uploaded_file($temporario, pastaUploads() . '/' . $nome)) {
+        throw new ErroDeUso('Não foi possível salvar a foto no servidor.', 500);
+    }
+}
+
+function leComprovante(string $nome): ?string
+{
+    if (BANCO === 'pgsql') {
+        $dados = umValor('SELECT dados FROM comprovantes WHERE nome = ?', [$nome]);
+        return is_resource($dados) ? stream_get_contents($dados) : $dados;
+    }
+    $caminho = pastaUploads() . '/' . $nome;
+    return is_file($caminho) ? file_get_contents($caminho) : null;
+}
+
+function apagaComprovante(string $nome): void
+{
+    if (BANCO === 'pgsql') {
+        consulta('DELETE FROM comprovantes WHERE nome = ?', [$nome]);
+        return;
+    }
+    $caminho = pastaUploads() . '/' . $nome;
+    if (is_file($caminho)) {
+        @unlink($caminho);
+    }
+}
+
 function rotaEnviaComprovante(): array
 {
     exigeLogin();
@@ -904,9 +942,7 @@ function rotaEnviaComprovante(): array
     }
 
     $nome = date('YmdHis') . '-' . bin2hex(random_bytes(5)) . '.' . $extensao;
-    if (!move_uploaded_file($arquivo['tmp_name'], pastaUploads() . '/' . $nome)) {
-        throw new ErroDeUso('Não foi possível salvar a foto no servidor.', 500);
-    }
+    guardaComprovante($nome, $arquivo['tmp_name']);
     return ['comprovante' => $nome];
 }
 
@@ -921,16 +957,16 @@ function rotaBaixaComprovante(): void
     if ($dono !== null && $eu['papel'] !== 'admin' && (int) $dono !== $eu['id']) {
         throw new ErroDeUso('Sem acesso a este comprovante.', 403);
     }
-    $caminho = pastaUploads() . '/' . $arquivo;
-    if (!is_file($caminho)) {
+    $conteudo = leComprovante($arquivo);
+    if ($conteudo === null) {
         throw new ErroDeUso('Comprovante não encontrado.', 404);
     }
     $tipos = ['jpg' => 'image/jpeg', 'png' => 'image/png', 'webp' => 'image/webp', 'pdf' => 'application/pdf'];
-    $extensao = strtolower(pathinfo($caminho, PATHINFO_EXTENSION));
+    $extensao = strtolower(pathinfo($arquivo, PATHINFO_EXTENSION));
     header('Content-Type: ' . ($tipos[$extensao] ?? 'application/octet-stream'));
-    header('Content-Length: ' . filesize($caminho));
+    header('Content-Length: ' . strlen($conteudo));
     header('Content-Disposition: inline; filename="' . $arquivo . '"');
     header('X-Content-Type-Options: nosniff');
-    readfile($caminho);
+    echo $conteudo;
     exit;
 }

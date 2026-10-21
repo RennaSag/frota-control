@@ -27,6 +27,9 @@ function banco(): PDO
             $pdo = new PDO('sqlite:' . SQLITE_ARQUIVO, null, null, $opcoes);
             $pdo->exec('PRAGMA journal_mode = WAL');
             $pdo->exec('PRAGMA foreign_keys = ON');
+        } elseif (BANCO === 'pgsql') {
+            [$dsn, $usuario, $senha] = dsnPostgres(PG_URL);
+            $pdo = new PDO($dsn, $usuario, $senha, $opcoes);
         } else {
             $base = 'mysql:host=' . MYSQL_HOST . ';port=' . MYSQL_PORTA . ';charset=utf8mb4';
             try {
@@ -50,11 +53,30 @@ function banco(): PDO
     return $pdo;
 }
 
+/** Converte postgresql://usuario:senha@servidor:porta/banco?sslmode=require para o PDO. */
+function dsnPostgres(string $url): array
+{
+    $p = parse_url($url);
+    if (!$p || empty($p['host']) || empty($p['path'])) {
+        throw new ErroDeUso('O endereço do PostgreSQL (DATABASE_URL) está incompleto.', 500);
+    }
+    parse_str($p['query'] ?? '', $extras);
+    $dsn = 'pgsql:host=' . $p['host']
+        . ';port=' . ($p['port'] ?? 5432)
+        . ';dbname=' . ltrim(rawurldecode($p['path']), '/')
+        . ';sslmode=' . ($extras['sslmode'] ?? 'prefer');
+    return [$dsn, rawurldecode($p['user'] ?? ''), rawurldecode($p['pass'] ?? '')];
+}
+
 function mensagemDeConexao(PDOException $e): string
 {
     if (BANCO === 'sqlite') {
         return 'Não foi possível abrir o arquivo do banco em "dados/". '
             . 'Verifique se a pasta existe e tem permissão de escrita. (' . $e->getMessage() . ')';
+    }
+    if (BANCO === 'pgsql') {
+        return 'Não foi possível conectar no PostgreSQL. Confira a variável DATABASE_URL. ('
+            . $e->getMessage() . ')';
     }
     return 'Não foi possível conectar no MySQL. Abra o Painel de Controle do XAMPP e '
         . 'clique em "Start" no MySQL. Se o seu MySQL tem senha, ajuste o arquivo '
@@ -64,8 +86,11 @@ function mensagemDeConexao(PDOException $e): string
 /** Trecho de SQL que agrupa por mês (AAAA-MM) — muda de banco para banco. */
 function sqlMes(string $coluna): string
 {
-    return BANCO === 'sqlite'
-        ? "strftime('%Y-%m', $coluna)"
+    if (BANCO === 'sqlite') {
+        return "strftime('%Y-%m', $coluna)";
+    }
+    return BANCO === 'pgsql'
+        ? "to_char($coluna, 'YYYY-MM')"
         : "DATE_FORMAT($coluna, '%Y-%m')";
 }
 
@@ -100,6 +125,9 @@ function insere(string $tabela, array $dados): int
     $marcas = array_fill(0, count($colunas), '?');
     $sql = "INSERT INTO $tabela (" . implode(', ', $colunas) . ')'
         . ' VALUES (' . implode(', ', $marcas) . ')';
+    if (BANCO === 'pgsql') {
+        return (int) consulta($sql . ' RETURNING id', array_values($dados))->fetchColumn();
+    }
     consulta($sql, array_values($dados));
     return (int) banco()->lastInsertId();
 }
@@ -119,7 +147,12 @@ function atualiza(string $tabela, int $id, array $dados): int
 // ---------------------------------------------------------------- estrutura
 function criaEstrutura(PDO $pdo): void
 {
-    $sql = estruturaSql(BANCO !== 'sqlite');
+    // No PostgreSQL o banco costuma ficar em outro servidor: em vez de repetir os
+    // CREATE a cada pedido, confere uma vez se a última tabela já existe.
+    if (BANCO === 'pgsql' && $pdo->query("SELECT to_regclass('comprovantes')")->fetchColumn()) {
+        return;
+    }
+    $sql = estruturaSql(BANCO);
     foreach ($sql['tabelas'] as $comando) {
         $pdo->exec($comando);
     }
@@ -134,19 +167,29 @@ function criaEstrutura(PDO $pdo): void
 }
 
 /** Comandos de criação das tabelas, separados por banco (função pura, fácil de revisar). */
-function estruturaSql(bool $mysql): array
+function estruturaSql(string $banco): array
 {
-    // Tipos que mudam entre os dois bancos
-    $id = $mysql
-        ? 'INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY'
-        : 'INTEGER PRIMARY KEY AUTOINCREMENT';
-    $ref = $mysql ? 'INT UNSIGNED' : 'INTEGER';
-    $simNao = $mysql ? 'TINYINT(1)' : 'INTEGER';
-    $decimal = $mysql ? 'DECIMAL(12,3)' : 'REAL';
-    $dataHora = $mysql ? 'DATETIME' : 'TEXT';
-    $data = $mysql ? 'DATE' : 'TEXT';
-    $dinheiro = $mysql ? 'BIGINT' : 'INTEGER';
-    $fim = $mysql ? ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci' : '';
+    // Tipos que mudam entre os bancos
+    $tipos = [
+        'mysql' => [
+            'id' => 'INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY', 'ref' => 'INT UNSIGNED',
+            'simNao' => 'TINYINT(1)', 'decimal' => 'DECIMAL(12,3)', 'dataHora' => 'DATETIME',
+            'data' => 'DATE', 'dinheiro' => 'BIGINT',
+            'fim' => ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci',
+        ],
+        'sqlite' => [
+            'id' => 'INTEGER PRIMARY KEY AUTOINCREMENT', 'ref' => 'INTEGER',
+            'simNao' => 'INTEGER', 'decimal' => 'REAL', 'dataHora' => 'TEXT',
+            'data' => 'TEXT', 'dinheiro' => 'INTEGER', 'fim' => '',
+        ],
+        'pgsql' => [
+            'id' => 'SERIAL PRIMARY KEY', 'ref' => 'INTEGER',
+            'simNao' => 'SMALLINT', 'decimal' => 'NUMERIC(12,3)', 'dataHora' => 'TIMESTAMP',
+            'data' => 'DATE', 'dinheiro' => 'BIGINT', 'fim' => '',
+        ],
+    ][$banco];
+    ['id' => $id, 'ref' => $ref, 'simNao' => $simNao, 'decimal' => $decimal,
+     'dataHora' => $dataHora, 'data' => $data, 'dinheiro' => $dinheiro, 'fim' => $fim] = $tipos;
 
     $tabelas = [];
 
@@ -226,6 +269,19 @@ function estruturaSql(bool $mysql): array
         chave VARCHAR(120) NOT NULL PRIMARY KEY,
         n     INT          NOT NULL,
         desde $dataHora    NOT NULL";
+
+    if ($banco === 'pgsql') {
+        // Em hospedagens como o Render o disco é apagado a cada reinício, então
+        // as sessões e as fotos das notas também ficam no banco.
+        $tabelas['sessoes'] = '
+            id     VARCHAR(128) NOT NULL PRIMARY KEY,
+            dados  TEXT         NOT NULL,
+            expira BIGINT       NOT NULL';
+        $tabelas['comprovantes'] = "
+            nome      VARCHAR(120) NOT NULL PRIMARY KEY,
+            dados     BYTEA        NOT NULL,
+            criado_em $dataHora    NOT NULL";
+    }
 
     $comandos = ['tabelas' => [], 'indices' => []];
     foreach ($tabelas as $nome => $corpo) {

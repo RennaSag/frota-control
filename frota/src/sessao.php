@@ -19,8 +19,69 @@ function iniciaSessao(): void
         'samesite' => 'Lax',
         'secure' => $https,
     ]);
+    if (BANCO === 'pgsql') {
+        session_set_save_handler(new SessoesNoBanco($segundos), true);
+    }
     session_name('frota');
     session_start();
+}
+
+/** Guarda as sessões numa tabela, para o login sobreviver ao reinício do servidor. */
+class SessoesNoBanco implements SessionHandlerInterface, SessionUpdateTimestampHandlerInterface
+{
+    private int $duracao;
+
+    public function __construct(int $duracao)
+    {
+        $this->duracao = $duracao;
+    }
+
+    public function open(string $caminho, string $nome): bool
+    {
+        return true;
+    }
+
+    public function close(): bool
+    {
+        return true;
+    }
+
+    public function read(string $id): string
+    {
+        return (string) umValor('SELECT dados FROM sessoes WHERE id = ? AND expira > ?', [$id, time()]);
+    }
+
+    public function write(string $id, string $dados): bool
+    {
+        consulta(
+            'INSERT INTO sessoes (id, dados, expira) VALUES (?, ?, ?)
+             ON CONFLICT (id) DO UPDATE SET dados = EXCLUDED.dados, expira = EXCLUDED.expira',
+            [$id, $dados, time() + $this->duracao]
+        );
+        return true;
+    }
+
+    public function destroy(string $id): bool
+    {
+        consulta('DELETE FROM sessoes WHERE id = ?', [$id]);
+        return true;
+    }
+
+    public function gc(int $maximo): int|false
+    {
+        return consulta('DELETE FROM sessoes WHERE expira < ?', [time()])->rowCount();
+    }
+
+    public function validateId(string $id): bool
+    {
+        return umValor('SELECT 1 FROM sessoes WHERE id = ? AND expira > ?', [$id, time()]) !== null;
+    }
+
+    public function updateTimestamp(string $id, string $dados): bool
+    {
+        consulta('UPDATE sessoes SET expira = ? WHERE id = ?', [time() + $this->duracao, $id]);
+        return true;
+    }
 }
 
 /** Usuário logado (ou null). Confere no banco para pegar bloqueio na hora. */
@@ -114,7 +175,7 @@ function podeTentarLogin(string $chave): bool
     $agora = time();
 
     if (!$linha) {
-        insere('tentativas_login', ['chave' => $chave, 'n' => 1, 'desde' => agora()]);
+        consulta('INSERT INTO tentativas_login (chave, n, desde) VALUES (?, 1, ?)', [$chave, agora()]);
         return true;
     }
     if ($agora - strtotime($linha['desde']) > $minutos * 60) {

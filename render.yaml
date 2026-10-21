@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: frota-control
+    runtime: docker
+    plan: free
+    region: ohio # mesma região do banco no Neon (us-east-2)
+    healthCheckPath: /manifest.php
+    envVars:
+      - key: DATABASE_URL # cole aqui o endereço do Neon (postgresql://...)
+        sync: false
+      - key: FROTA_ADMIN_SENHA # senha do admin criado no primeiro acesso
+        sync: false
