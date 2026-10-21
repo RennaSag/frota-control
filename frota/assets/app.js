@@ -9,7 +9,7 @@ const estado = {
   viagensAbertas: [],
   mes: hoje().slice(0, 7),
   filtros: {},
-  meses: 12,
+  versaoAba: 0,
 };
 
 function hoje() {
@@ -67,10 +67,10 @@ const TRACOS = {
     + '<path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16"/>',
   usuario: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   panorama: '<path d="M3 3v18h18"/><path d="M8 17v-5M13 17V8M18 17v-8"/>',
-  relatorio: '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 6-7"/>',
   ajustes: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/>'
     + '<circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
   fechar: '<path d="M6 6l12 12M18 6 6 18"/>',
+  sino: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
 };
 const svg = (nome) => `<svg class="ico-linha" viewBox="0 0 24 24" aria-hidden="true">${TRACOS[nome]}</svg>`;
 
@@ -169,6 +169,8 @@ function aoEnviar(form, acao) {
 }
 
 function telaLogin(mensagem) {
+  clearInterval(avisos.timer);
+  avisos.timer = null;
   document.body.classList.add('tela-entrada');
   app.innerHTML = `
     <div class="tela-login">
@@ -205,7 +207,6 @@ const ABAS_MOTORISTA = [
 const ABAS_ADMIN = [
   { id: 'panorama', ico: 'panorama', nome: 'Panorama' },
   { id: 'lancamentos', ico: 'lista', nome: 'Lançamentos' },
-  { id: 'relatorios', ico: 'relatorio', nome: 'Relatórios' },
   { id: 'viagens', ico: 'rota', nome: 'Viagens' },
   { id: 'ajustes', ico: 'ajustes', nome: 'Ajustes' },
 ];
@@ -239,6 +240,10 @@ function desenhaEstrutura() {
         <span>${esc(estado.usuario.nome)}</span>
       </div>
       <div class="espaco"></div>
+      ${ehAdmin() ? `
+        <button class="sino" type="button" id="b-avisos" aria-label="Avisos dos motoristas">
+          ${svg('sino')}<span class="contador oculto" aria-hidden="true"></span>
+        </button>` : ''}
       <div class="selo">${ehAdmin() ? 'Proprietário' : 'Motorista'}</div>
     </header>
     <nav class="nav" aria-label="Seções">
@@ -251,6 +256,9 @@ function desenhaEstrutura() {
   app.querySelectorAll('.nav button').forEach((b) => {
     b.onclick = () => abreAba(b.dataset.aba);
   });
+  const sino = document.getElementById('b-avisos');
+  if (sino) sino.onclick = abreAvisos;
+  iniciaAvisos();
 }
 
 async function abreAba(id) {
@@ -258,8 +266,12 @@ async function abreAba(id) {
   app.querySelectorAll('.nav button').forEach((b) => {
     b.setAttribute('aria-current', String(b.dataset.aba === id));
   });
-  const alvo = document.getElementById('conteudo');
+  // Cada aba desenha num bloco novo; se outra aba for aberta antes desta terminar de
+  // carregar, o bloco antigo sai da tela e o que ele fizer depois é ignorado.
+  const vez = ++estado.versaoAba;
+  const alvo = document.createElement('div');
   alvo.innerHTML = '<p class="carregando">Carregando…</p>';
+  document.getElementById('conteudo').replaceChildren(alvo);
   window.scrollTo({ top: 0 });
   const telas = {
     novo: telaNovoGasto,
@@ -267,13 +279,13 @@ async function abreAba(id) {
     lancamentos: telaLancamentos,
     viagens: telaViagens,
     panorama: telaPanorama,
-    relatorios: telaRelatorios,
     ajustes: telaAjustes,
     perfil: telaAjustes,
   };
   try {
     await telas[id](alvo);
   } catch (erro) {
+    if (vez !== estado.versaoAba) return;
     alvo.innerHTML = `<div class="aviso erro">${esc(erro.message)}</div>`;
   }
 }
@@ -289,6 +301,137 @@ async function recarregaBasico() {
   estado.caminhoes = caminhoes;
   estado.usuarios = usuarios;
   estado.viagensAbertas = viagens;
+}
+
+const avisos = { ultimoId: null, timer: null };
+
+const ACOES_AVISO = {
+  criou: { saida: 'registrou um gasto', entrada: 'registrou uma entrada' },
+  editou: { saida: 'editou um gasto', entrada: 'editou uma entrada' },
+  excluiu: { saida: 'excluiu um gasto', entrada: 'excluiu uma entrada' },
+  abriu: { viagem: 'abriu uma viagem' },
+};
+
+function textoAviso(a) {
+  return `${a.motorista} ${ACOES_AVISO[a.acao]?.[a.tipo] || a.acao}`;
+}
+
+function quandoAviso(segundos) {
+  const s = Number(segundos) || 0;
+  if (s < 60) return 'agora mesmo';
+  if (s < 3600) return `há ${Math.floor(s / 60)} min`;
+  if (s < 86400) return `há ${Math.floor(s / 3600)} h`;
+  const dias = Math.floor(s / 86400);
+  return dias === 1 ? 'ontem' : `há ${dias} dias`;
+}
+
+function mostraContador(n) {
+  const contador = document.querySelector('#b-avisos .contador');
+  if (!contador) return;
+  contador.textContent = n > 99 ? '99+' : String(n);
+  contador.classList.toggle('oculto', !n);
+  document.getElementById('b-avisos').setAttribute('aria-label',
+    n ? `Avisos dos motoristas: ${n} ${n === 1 ? 'novo' : 'novos'}` : 'Avisos dos motoristas');
+}
+
+async function notificaAparelho(texto) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const titulo = window.NOME_SISTEMA || 'Controle da Frota';
+  const opcoes = { body: texto, icon: 'assets/logo.png', tag: 'frota-avisos' };
+  try {
+    const registro = await navigator.serviceWorker?.getRegistration();
+    if (registro) await registro.showNotification(titulo, opcoes);
+    else new Notification(titulo, opcoes);
+  } catch {
+    // Alguns celulares não deixam mostrar; o aviso dentro do app continua aparecendo.
+  }
+}
+
+async function verificaAvisos() {
+  if (!ehAdmin()) return null;
+  let r;
+  try {
+    r = await api('GET', 'avisos');
+  } catch {
+    return null;
+  }
+  mostraContador(r.nao_lidos);
+  if (avisos.ultimoId !== null && r.ultimo_id > avisos.ultimoId) {
+    const novos = r.itens.filter((a) => Number(a.id) > avisos.ultimoId);
+    if (novos.length) {
+      const texto = novos.length === 1
+        ? `${textoAviso(novos[0])}: ${novos[0].resumo}`
+        : `${novos.length} novas movimentações dos motoristas.`;
+      recado(texto);
+      notificaAparelho(texto);
+    }
+  }
+  avisos.ultimoId = r.ultimo_id;
+  return r;
+}
+
+function iniciaAvisos() {
+  clearInterval(avisos.timer);
+  avisos.timer = null;
+  avisos.ultimoId = null;
+  if (!ehAdmin()) return;
+  verificaAvisos();
+  avisos.timer = setInterval(() => { if (!document.hidden) verificaAvisos(); }, 45000);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && avisos.timer) verificaAvisos();
+});
+
+async function abreAvisos() {
+  const r = await verificaAvisos();
+  if (!r) {
+    recado('Não foi possível carregar os avisos.');
+    return;
+  }
+  const podePedir = 'Notification' in window && Notification.permission === 'default';
+  const { elemento } = janela('Avisos dos motoristas', `
+    <p class="ajuda" style="margin-top:0">
+      Tudo que os motoristas registram, editam ou excluem aparece aqui.
+      Com o app aberto, ele confere as novidades a cada minuto.
+    </p>
+    ${podePedir ? `
+      <div class="aviso info">
+        Quer receber o aviso também na tela do aparelho?
+        <button class="btn pequeno" type="button" data-permitir style="margin-top:8px">
+          Ativar notificações
+        </button>
+      </div>` : ''}
+    ${r.itens.length ? `
+      <div class="lista avisos">
+        ${r.itens.map((a) => `
+          <button class="item ${a.novo ? 'novo' : ''} ${a.lancamento_id ? '' : 'fixo'}" type="button"
+                  ${a.lancamento_id ? `data-lancamento="${a.lancamento_id}"` : ''}>
+            <span class="marcador ${esc(a.tipo)}" aria-hidden="true"></span>
+            <span class="corpo">
+              <strong>${esc(textoAviso(a))}${a.novo ? ' <span class="etiqueta aberta">Novo</span>' : ''}</strong>
+              <small>${esc(a.resumo)}</small>
+              <small>${quandoAviso(a.segundos)}</small>
+            </span>
+            ${a.lancamento_id ? '<span class="seta" aria-hidden="true">›</span>' : ''}
+          </button>`).join('')}
+      </div>` : '<div class="vazio">Nenhuma movimentação dos motoristas ainda.</div>'}`);
+  ligaItens(elemento);
+  elemento.querySelector('[data-permitir]')?.addEventListener('click', async (e) => {
+    const caixa = e.target.closest('.aviso');
+    const resposta = await Notification.requestPermission();
+    caixa.textContent = resposta === 'granted'
+      ? 'Notificações ativadas neste aparelho.'
+      : 'As notificações não foram permitidas. Os avisos continuam aparecendo aqui no app.';
+  });
+  if (r.nao_lidos) {
+    try {
+      await api('POST', 'avisos-lidos');
+      mostraContador(0);
+    } catch {
+      // Continua como não lido; tenta de novo na próxima vez.
+    }
+  }
 }
 
 const PAGAMENTOS = ['Dinheiro', 'Cartão da empresa', 'Pix', 'Cartão frete', 'Boleto', 'Do próprio bolso'];
@@ -375,6 +518,35 @@ function camposLancamento(tipo, l = {}) {
         ${opcoesViagem(l.viagem_id, l.viagem_origem
           ? { id: l.viagem_id, origem: l.viagem_origem, destino: l.viagem_destino } : null)}
       </select>
+      <button class="btn pequeno botao-nova-viagem" type="button" data-nova-viagem>+ Registrar nova viagem</button>
+      <div class="caixa-viagem oculto" data-se="nova-viagem">
+        <strong>Nova viagem</strong>
+        <div class="linha duas">
+          <div class="campo">
+            <label for="nv-origem">Saindo de</label>
+            <input id="nv-origem" maxlength="80" placeholder="Cidade de saída">
+          </div>
+          <div class="campo">
+            <label for="nv-destino">Indo para</label>
+            <input id="nv-destino" maxlength="80" placeholder="Cidade de destino">
+          </div>
+        </div>
+        <div class="linha duas">
+          <div class="campo">
+            <label for="nv-inicio">Dia da saída</label>
+            <input id="nv-inicio" type="date">
+          </div>
+          <div class="campo opcional">
+            <label for="nv-km">Km do painel na saída</label>
+            <input id="nv-km" inputmode="numeric">
+          </div>
+        </div>
+        <p class="dica">A viagem fica com o mesmo caminhão${ehAdmin() ? ' e motorista' : ''} deste lançamento.</p>
+        <div class="acoes fim">
+          <button class="btn" type="button" data-nv-cancelar>Cancelar</button>
+          <button class="btn principal" type="button" data-nv-salvar>Abrir viagem</button>
+        </div>
+      </div>
     </div>
 
     <div class="campo">
@@ -566,6 +738,66 @@ function ligaCamposLancamento(form) {
     avisoFoto.textContent = 'Comprovante já anexado.';
     avisoFoto.classList.remove('oculto');
   }
+
+  ligaNovaViagem(form);
+}
+
+function ligaNovaViagem(form) {
+  const caixa = form.querySelector('[data-se="nova-viagem"]');
+  const abrir = form.querySelector('[data-nova-viagem]');
+  const salvar = caixa.querySelector('[data-nv-salvar]');
+  const campo = (id) => caixa.querySelector(`#nv-${id}`);
+
+  const fecha = () => {
+    caixa.classList.add('oculto');
+    abrir.classList.remove('oculto');
+    ['origem', 'destino', 'km'].forEach((id) => { campo(id).value = ''; });
+  };
+
+  abrir.onclick = () => {
+    caixa.classList.remove('oculto');
+    abrir.classList.add('oculto');
+    campo('inicio').value = form.elements.data.value || hoje();
+    campo('origem').focus();
+  };
+  caixa.querySelector('[data-nv-cancelar]').onclick = fecha;
+
+  salvar.onclick = async () => {
+    form.querySelector('.aviso.erro')?.remove();
+    const origem = campo('origem').value.trim();
+    const destino = campo('destino').value.trim();
+    if (!origem || !destino) {
+      mostraErro(form, 'Informe de onde a viagem está saindo e para onde vai.');
+      return;
+    }
+    salvar.disabled = true;
+    salvar.textContent = 'Abrindo…';
+    try {
+      const { id } = await api('POST', 'viagens', {}, {
+        origem,
+        destino,
+        inicio: campo('inicio').value || hoje(),
+        km_inicial: campo('km').value,
+        caminhao_id: form.elements.caminhao_id.value,
+        usuario_id: form.elements.usuario_id?.value,
+      });
+      estado.viagensAbertas = await api('GET', 'viagens', { status: 'aberta', limite: 100 });
+      form.elements.viagem_id.innerHTML = opcoesViagem(id);
+      fecha();
+      recado('Viagem aberta e escolhida neste lançamento.');
+    } catch (erro) {
+      mostraErro(form, erro.message);
+    } finally {
+      salvar.disabled = false;
+      salvar.textContent = 'Abrir viagem';
+    }
+  };
+
+  caixa.querySelectorAll('input').forEach((input) => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); salvar.click(); }
+    });
+  });
 }
 
 function validaLancamento(dados, tipo) {
@@ -668,7 +900,7 @@ function itemLancamento(l) {
         <strong>${esc(l.descricao || l.categoria)}</strong>
         <small>${dataCurta(l.data)}${detalhes ? ` • ${esc(detalhes)}` : ''}</small>
       </span>
-      <span class="dinheiro ${entrada ? 'entrada' : ''}">
+      <span class="dinheiro ${entrada ? 'entrada' : 'saida'}">
         ${entrada ? '+' : '−'} ${dinheiro(l.valor_centavos)}
       </span>
       <span class="seta" aria-hidden="true">›</span>
@@ -748,7 +980,7 @@ async function telaLancamentos(alvo) {
         </div>
         ${admin ? `
           <div class="acoes" style="margin-top:14px">
-            <a class="btn" id="b-csv" href="#">Baixar planilha do filtro</a>
+            <a class="btn" id="b-csv" href="#">Baixar PDF do filtro</a>
           </div>` : ''}
       </div>
       <div id="lista"><p class="carregando">Carregando…</p></div>
@@ -759,7 +991,7 @@ async function telaLancamentos(alvo) {
     caixa.innerHTML = '<p class="carregando">Carregando…</p>';
     const r = await api('GET', 'lancamentos', filtrosAtuais());
     const csv = document.getElementById('b-csv');
-    if (csv) csv.href = endereco('csv', filtrosAtuais());
+    if (csv) csv.href = endereco('pdf', filtrosAtuais());
     if (!r.qtd) {
       caixa.innerHTML = `
         <div class="vazio">
@@ -778,7 +1010,7 @@ async function telaLancamentos(alvo) {
             </div>` : ''}
           <div class="mini">
             <div class="rotulo">${admin ? 'Saídas' : 'Total gasto'}</div>
-            <div class="numero ${admin ? 'saida' : ''}">${dinheiro(r.saidas_centavos)}</div>
+            <div class="numero saida">${dinheiro(r.saidas_centavos)}</div>
             <small>${r.qtd} ${r.qtd === 1 ? 'lançamento' : 'lançamentos'}</small>
           </div>
           ${admin ? `
@@ -916,7 +1148,7 @@ async function telaViagens(alvo) {
                 ${v.status === 'aberta' ? '<span class="etiqueta aberta">Em andamento</span>' : ''}
               </span>
               ${ehAdmin() ? `
-                <span class="dinheiro ${saldo >= 0 ? 'entrada' : ''}">
+                <span class="dinheiro ${saldo >= 0 ? 'entrada' : 'saida'}">
                   ${saldo >= 0 ? '' : '−'}${dinheiro(Math.abs(saldo))}
                 </span>` : ''}
               <span class="seta" aria-hidden="true">›</span>
@@ -1131,11 +1363,11 @@ function ajustaPainel(raiz) {
   });
 }
 
-function barras(itens, rotulo = (i) => esc(i.nome)) {
+function barras(itens, rotulo = (i) => esc(i.nome), tipo = 'saida') {
   if (!itens.length) return '<p class="ajuda">Sem lançamentos neste período.</p>';
   const maior = Math.max(...itens.map((i) => Number(i.total_centavos)));
   return `
-    <div class="barras">
+    <div class="barras ${tipo}">
       ${itens.map((i) => `
         <div class="linha-barra">
           <div class="rotulo-barra">
@@ -1210,52 +1442,151 @@ function graficoMeses(meses) {
     </div>`;
 }
 
+function somaMeses(mes, n) {
+  const [a, m] = mes.split('-').map(Number);
+  const d = new Date(Date.UTC(a, m - 1 + n, 1));
+  return d.toISOString().slice(0, 7);
+}
+
+function periodoLongo(de, ate) {
+  return de === ate ? mesLongo(de) : `${mesLongo(de)} até ${mesLongo(ate)}`;
+}
+
+function atalhosPeriodo() {
+  const atual = hoje().slice(0, 7);
+  return [
+    { nome: 'Este mês', de: atual, ate: atual },
+    { nome: 'Mês passado', de: somaMeses(atual, -1), ate: somaMeses(atual, -1) },
+    { nome: 'Últimos 3 meses', de: somaMeses(atual, -2), ate: atual },
+    { nome: 'Últimos 6 meses', de: somaMeses(atual, -5), ate: atual },
+    { nome: 'Últimos 12 meses', de: somaMeses(atual, -11), ate: atual },
+    { nome: 'Este ano', de: `${atual.slice(0, 4)}-01`, ate: atual },
+  ];
+}
+
+function tabelaCaminhoes(lista) {
+  return `
+    <div class="tabela-rolagem">
+      <table class="dados">
+        <thead>
+          <tr>
+            <th>Caminhão</th><th>Entradas</th><th>Saídas</th><th>Saldo</th>
+            <th>Combustível</th><th>Litros</th><th>R$/litro</th><th>Km</th><th>Km/litro</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${lista.length ? lista.map((c) => {
+            const litros = Number(c.litros);
+            const km = Number(c.km_rodados);
+            const precoLitro = litros > 0 ? Number(c.combustivel_centavos) / litros : null;
+            return `
+            <tr>
+              <td>${esc(c.placa)}${c.apelido ? `<br><small style="color:var(--tinta-3)">${esc(c.apelido)}</small>` : ''}</td>
+              <td>${dinheiro(c.entradas_centavos)}</td>
+              <td>${dinheiro(c.saidas_centavos)}</td>
+              <td class="${c.saldo_centavos >= 0 ? 'positivo' : 'negativo'}">
+                ${c.saldo_centavos >= 0 ? '' : '−'}${dinheiro(Math.abs(c.saldo_centavos))}
+              </td>
+              <td>${dinheiro(c.combustivel_centavos)}</td>
+              <td>${litros ? numero(litros) : '—'}</td>
+              <td>${precoLitro ? dinheiro(precoLitro) : '—'}</td>
+              <td>${km ? numero(km) : '—'}</td>
+              <td>${km && litros ? numero(km / litros) : '—'}</td>
+            </tr>`;
+          }).join('') : '<tr><td colspan="9">Sem lançamentos neste período.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+    <p class="ajuda" style="margin:12px 0 0">
+      Km e km/litro só aparecem quando as viagens têm o km de saída e de chegada preenchidos.
+    </p>`;
+}
+
 async function telaPanorama(alvo) {
+  const atual = hoje().slice(0, 7);
+  const periodo = { de: atual, ate: atual };
+
   alvo.innerHTML = `
     <div class="pilha">
       <div class="titulo-secao">
-        <h1>Panorama do mês</h1>
-        <p id="p-mes">${mesLongo(estado.mes)}</p>
+        <h1>Panorama</h1>
+        <p id="p-periodo"></p>
       </div>
       <div class="cartao">
         <div class="filtros">
           <div class="campo">
-            <label for="p-seletor">Mês</label>
-            <input id="p-seletor" type="month" value="${estado.mes}">
+            <label for="p-de">De</label>
+            <input id="p-de" type="month" value="${periodo.de}">
+          </div>
+          <div class="campo">
+            <label for="p-ate">Até</label>
+            <input id="p-ate" type="month" value="${periodo.ate}">
           </div>
           <div class="acoes">
-            <a class="btn" id="p-csv" href="#">Baixar planilha do mês</a>
+            <a class="btn" id="p-pdf" href="#">Baixar PDF do panorama</a>
           </div>
+        </div>
+        <div class="atalhos" role="group" aria-label="Períodos prontos">
+          ${atalhosPeriodo().map((a, i) => `
+            <button class="btn pequeno" type="button" data-atalho="${i}">${esc(a.nome)}</button>`).join('')}
         </div>
       </div>
       <div id="painel"><p class="carregando">Carregando…</p></div>
     </div>`;
 
+  const campoDe = alvo.querySelector('#p-de');
+  const campoAte = alvo.querySelector('#p-ate');
+
   const atualiza = async () => {
+    if (periodo.de > periodo.ate) [periodo.de, periodo.ate] = [periodo.ate, periodo.de];
+    campoDe.value = periodo.de;
+    campoAte.value = periodo.ate;
+    const atalhos = atalhosPeriodo();
+    alvo.querySelectorAll('[data-atalho]').forEach((b) => {
+      const a = atalhos[b.dataset.atalho];
+      b.setAttribute('aria-pressed', String(a.de === periodo.de && a.ate === periodo.ate));
+    });
+
     const painel = document.getElementById('painel');
     painel.innerHTML = '<p class="carregando">Carregando…</p>';
-    document.getElementById('p-mes').textContent = mesLongo(estado.mes);
-    document.getElementById('p-csv').href = endereco('csv', { mes: estado.mes });
-    const r = await api('GET', 'resumo', { mes: estado.mes });
+    const { de, ate } = periodo;
+    const varios = de !== ate;
+    document.getElementById('p-periodo').textContent = periodoLongo(de, ate);
+    document.getElementById('p-pdf').href = endereco('pdf-panorama', { de, ate });
+
+    let r;
+    try {
+      r = await api('GET', 'resumo', { de, ate });
+    } catch (erro) {
+      painel.innerHTML = `<div class="aviso erro">${esc(erro.message)}</div>`;
+      return;
+    }
+    if (periodo.de !== de || periodo.ate !== ate) return;
 
     const saldo = r.atual.saldo_centavos;
     const saldoAnterior = r.anterior.saldo_centavos;
     const diferenca = saldo - saldoAnterior;
+    const periodoAnterior = periodoLongo(r.anterior_de, r.anterior_ate);
     const precoLitro = r.litros > 0 ? r.combustivel_centavos / r.litros : null;
+    const comMovimento = r.meses.filter((m) => m.qtd > 0).length || 1;
     const comparacao = r.anterior.qtd
       ? `${diferenca >= 0 ? '▲' : '▼'} <b>${dinheiro(Math.abs(diferenca))}</b>
-         ${diferenca >= 0 ? 'melhor' : 'pior'} que ${mesLongo(r.mes_anterior)}
+         ${diferenca >= 0 ? 'melhor' : 'pior'} que ${periodoAnterior}
          (saldo de ${dinheiro(saldoAnterior)})`
-      : `Sem lançamentos em ${mesLongo(r.mes_anterior)} para comparar.`;
+      : `Sem lançamentos em ${periodoAnterior} para comparar.`;
 
     painel.innerHTML = `
       <div class="pilha">
         <div class="destaque">
-          <div class="rotulo">Saldo de ${mesLongo(estado.mes)}</div>
+          <div class="rotulo">Saldo de ${periodoLongo(de, ate)}</div>
           <div class="numero ${saldo >= 0 ? 'positivo' : 'negativo'}">
             ${saldo >= 0 ? '' : '−'}${dinheiro(Math.abs(saldo))}
           </div>
           <div class="variacao">${comparacao}</div>
+          ${varios ? `
+            <div class="variacao">
+              Média de <b>${dinheiro(Math.round(saldo / comMovimento))}</b> por mês
+            </div>` : ''}
         </div>
 
         <div class="grade">
@@ -1286,10 +1617,44 @@ async function telaPanorama(alvo) {
           </div>
         </div>
 
+        ${varios ? `
+          <div class="cartao">
+            <h2>Entradas e saídas mês a mês</h2>
+            <p class="ajuda">O número embaixo de cada mês é o saldo (entradas menos saídas).</p>
+            ${graficoMeses(r.meses)}
+          </div>
+
+          <div class="cartao">
+            <h2>Mês a mês em números</h2>
+            <div class="tabela-rolagem">
+              <table class="dados">
+                <thead>
+                  <tr><th>Mês</th><th>Entradas</th><th>Saídas</th><th>Saldo</th><th>Lanç.</th></tr>
+                </thead>
+                <tbody>
+                  ${[...r.meses].reverse().map((m) => `
+                    <tr${m.qtd ? '' : ' class="sem-movimento"'}>
+                      <td>${mesCurto(m.mes)}</td>
+                      <td>${dinheiro(m.entradas_centavos)}</td>
+                      <td>${dinheiro(m.saidas_centavos)}</td>
+                      <td class="${m.saldo_centavos >= 0 ? 'positivo' : 'negativo'}">
+                        ${m.saldo_centavos >= 0 ? '' : '−'}${dinheiro(Math.abs(m.saldo_centavos))}
+                      </td>
+                      <td>${m.qtd}</td>
+                    </tr>`).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>` : `
+          <div class="cartao">
+            <h2>Gastos por dia</h2>
+            <p class="ajuda">Cada coluna é um dia do mês.</p>
+            ${colunasPorDia(de, r.por_dia)}
+          </div>`}
+
         <div class="cartao">
-          <h2>Gastos por dia</h2>
-          <p class="ajuda">Cada coluna é um dia do mês.</p>
-          ${colunasPorDia(estado.mes, r.por_dia)}
+          <h2>Por caminhão</h2>
+          ${tabelaCaminhoes(r.por_caminhao)}
         </div>
 
         <div class="cartao">
@@ -1299,30 +1664,7 @@ async function telaPanorama(alvo) {
 
         <div class="cartao">
           <h2>Entradas por tipo de frete</h2>
-          ${barras(r.entradas_por_categoria, (i) => esc(i.nome))}
-        </div>
-
-        <div class="cartao">
-          <h2>Por caminhão</h2>
-          <div class="tabela-rolagem">
-            <table class="dados">
-              <thead>
-                <tr><th>Caminhão</th><th>Entradas</th><th>Saídas</th><th>Saldo</th></tr>
-              </thead>
-              <tbody>
-                ${r.por_caminhao.length ? r.por_caminhao.map((c) => {
-                  const s = Number(c.entradas_centavos) - Number(c.saidas_centavos);
-                  return `
-                  <tr>
-                    <td>${esc(c.placa)}${c.apelido ? `<br><small style="color:var(--tinta-3)">${esc(c.apelido)}</small>` : ''}</td>
-                    <td>${dinheiro(c.entradas_centavos)}</td>
-                    <td>${dinheiro(c.saidas_centavos)}</td>
-                    <td class="${s >= 0 ? 'positivo' : 'negativo'}">${s >= 0 ? '' : '−'}${dinheiro(Math.abs(s))}</td>
-                  </tr>`;
-                }).join('') : '<tr><td colspan="4">Sem lançamentos neste mês.</td></tr>'}
-              </tbody>
-            </table>
-          </div>
+          ${barras(r.entradas_por_categoria, (i) => esc(i.nome), 'entrada')}
         </div>
 
         <div class="cartao">
@@ -1333,169 +1675,22 @@ async function telaPanorama(alvo) {
     ajustaPainel(painel);
   };
 
-  alvo.querySelector('#p-seletor').onchange = (e) => {
-    estado.mes = e.target.value || hoje().slice(0, 7);
+  campoDe.onchange = () => {
+    periodo.de = campoDe.value || atual;
     atualiza();
   };
-  await atualiza();
-}
-
-async function telaRelatorios(alvo) {
-  alvo.innerHTML = `
-    <div class="pilha">
-      <div class="titulo-secao">
-        <h1>Relatórios</h1>
-        <p id="r-periodo"></p>
-      </div>
-      <div class="cartao">
-        <div class="filtros">
-          <div class="campo">
-            <label for="r-meses">Período</label>
-            <select id="r-meses">
-              <option value="3">Últimos 3 meses</option>
-              <option value="6">Últimos 6 meses</option>
-              <option value="12" selected>Últimos 12 meses</option>
-              <option value="24">Últimos 24 meses</option>
-            </select>
-          </div>
-          <div class="acoes">
-            <a class="btn" id="r-csv" href="#">Baixar planilha do período</a>
-          </div>
-        </div>
-      </div>
-      <div id="painel-relatorio"><p class="carregando">Carregando…</p></div>
-    </div>`;
-
-  const atualiza = async () => {
-    const painel = document.getElementById('painel-relatorio');
-    painel.innerHTML = '<p class="carregando">Carregando…</p>';
-    const meses = estado.meses;
-    const de = (() => {
-      const d = new Date();
-      d.setDate(1);
-      d.setMonth(d.getMonth() - (meses - 1));
-      return d.toISOString().slice(0, 10);
-    })();
-    const ate = hoje();
-
-    const [historico, relatorio] = await Promise.all([
-      api('GET', 'historico', { meses }),
-      api('GET', 'relatorio', { de, ate }),
-    ]);
-
-    document.getElementById('r-periodo').textContent =
-      `${mesLongo(de.slice(0, 7))} até ${mesLongo(ate.slice(0, 7))}`;
-    document.getElementById('r-csv').href = endereco('csv', { de, ate, limite: 1000 });
-
-    const totalEntradas = historico.meses.reduce((s, m) => s + Number(m.entradas_centavos), 0);
-    const totalSaidas = historico.meses.reduce((s, m) => s + Number(m.saidas_centavos), 0);
-    const saldo = totalEntradas - totalSaidas;
-    const comMovimento = historico.meses.filter((m) => m.qtd > 0).length || 1;
-
-    painel.innerHTML = `
-      <div class="pilha">
-        <div class="destaque">
-          <div class="rotulo">Saldo do período</div>
-          <div class="numero ${saldo >= 0 ? 'positivo' : 'negativo'}">
-            ${saldo >= 0 ? '' : '−'}${dinheiro(Math.abs(saldo))}
-          </div>
-          <div class="variacao">
-            Entradas <b>${dinheiro(totalEntradas)}</b> · Saídas <b>${dinheiro(totalSaidas)}</b>
-            · média de <b>${dinheiro(Math.round(saldo / comMovimento))}</b> por mês
-          </div>
-        </div>
-
-        <div class="cartao">
-          <h2>Entradas e saídas mês a mês</h2>
-          <p class="ajuda">O número embaixo de cada mês é o saldo (entradas menos saídas).</p>
-          ${graficoMeses(historico.meses)}
-        </div>
-
-        <div class="cartao">
-          <h2>Mês a mês em números</h2>
-          <div class="tabela-rolagem">
-            <table class="dados">
-              <thead>
-                <tr><th>Mês</th><th>Entradas</th><th>Saídas</th><th>Saldo</th><th>Lanç.</th></tr>
-              </thead>
-              <tbody>
-                ${[...historico.meses].reverse().map((m) => `
-                  <tr${m.qtd ? "" : " class=\"sem-movimento\""}>
-                    <td>${mesCurto(m.mes)}</td>
-                    <td>${dinheiro(m.entradas_centavos)}</td>
-                    <td>${dinheiro(m.saidas_centavos)}</td>
-                    <td class="${m.saldo_centavos >= 0 ? 'positivo' : 'negativo'}">
-                      ${m.saldo_centavos >= 0 ? '' : '−'}${dinheiro(Math.abs(m.saldo_centavos))}
-                    </td>
-                    <td>${m.qtd}</td>
-                  </tr>`).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="cartao">
-          <h2>Cada caminhão no período</h2>
-          <div class="tabela-rolagem">
-            <table class="dados">
-              <thead>
-                <tr>
-                  <th>Caminhão</th><th>Entradas</th><th>Saídas</th><th>Saldo</th>
-                  <th>Combustível</th><th>Litros</th><th>R$/litro</th><th>Km</th><th>Km/litro</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${relatorio.por_caminhao.length ? relatorio.por_caminhao.map((c) => {
-                  const litros = Number(c.litros);
-                  const km = Number(c.km_rodados);
-                  const precoLitro = litros > 0 ? Number(c.combustivel_centavos) / litros : null;
-                  return `
-                  <tr>
-                    <td>${esc(c.placa)}${c.apelido ? `<br><small style="color:var(--tinta-3)">${esc(c.apelido)}</small>` : ''}</td>
-                    <td>${dinheiro(c.entradas_centavos)}</td>
-                    <td>${dinheiro(c.saidas_centavos)}</td>
-                    <td class="${c.saldo_centavos >= 0 ? 'positivo' : 'negativo'}">
-                      ${c.saldo_centavos >= 0 ? '' : '−'}${dinheiro(Math.abs(c.saldo_centavos))}
-                    </td>
-                    <td>${dinheiro(c.combustivel_centavos)}</td>
-                    <td>${litros ? numero(litros) : '—'}</td>
-                    <td>${precoLitro ? dinheiro(precoLitro) : '—'}</td>
-                    <td>${km ? numero(km) : '—'}</td>
-                    <td>${km && litros ? numero(km / litros) : '—'}</td>
-                  </tr>`;
-                }).join('') : '<tr><td colspan="9">Nenhum caminhão cadastrado.</td></tr>'}
-              </tbody>
-            </table>
-          </div>
-          <p class="ajuda" style="margin:12px 0 0">
-            Km e km/litro só aparecem quando as viagens têm o km de saída e de chegada preenchidos.
-          </p>
-        </div>
-
-        <div class="cartao">
-          <h2>Saídas por categoria no período</h2>
-          ${barras(relatorio.saidas_por_categoria, (i) => esc(i.nome))}
-        </div>
-
-        <div class="cartao">
-          <h2>Entradas por tipo de frete no período</h2>
-          ${barras(relatorio.entradas_por_categoria, (i) => esc(i.nome))}
-        </div>
-
-        <div class="cartao">
-          <h2>Gastos por motorista no período</h2>
-          ${barras(relatorio.por_motorista, (i) => esc(i.nome))}
-        </div>
-      </div>`;
-    ajustaPainel(painel);
-  };
-
-  const seletor = alvo.querySelector('#r-meses');
-  seletor.value = String(estado.meses);
-  seletor.onchange = (e) => {
-    estado.meses = Number(e.target.value) || 12;
+  campoAte.onchange = () => {
+    periodo.ate = campoAte.value || atual;
     atualiza();
   };
+  alvo.querySelectorAll('[data-atalho]').forEach((b) => {
+    b.onclick = () => {
+      const a = atalhosPeriodo()[b.dataset.atalho];
+      periodo.de = a.de;
+      periodo.ate = a.ate;
+      atualiza();
+    };
+  });
   await atualiza();
 }
 
@@ -1840,6 +2035,8 @@ async function excluiCategoria(c, aoConcluir) {
     recado(erro.message);
   }
 }
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
 (async function inicia() {
   try {

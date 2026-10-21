@@ -136,7 +136,7 @@ function atualiza(string $tabela, int $id, array $dados): int
 
 function criaEstrutura(PDO $pdo): void
 {
-    if (BANCO === 'pgsql' && $pdo->query("SELECT to_regclass('comprovantes')")->fetchColumn()) {
+    if (BANCO === 'pgsql' && $pdo->query("SELECT to_regclass('avisos_vistos')")->fetchColumn()) {
         return;
     }
     $sql = estruturaSql(BANCO);
@@ -248,6 +248,20 @@ function estruturaSql(string $banco): array
         FOREIGN KEY (categoria_id) REFERENCES categorias(id),
         FOREIGN KEY (caminhao_id)  REFERENCES caminhoes(id),
         FOREIGN KEY (viagem_id)    REFERENCES viagens(id)";
+
+    $tabelas['avisos'] = "
+        id            $id,
+        usuario_id    $ref         NOT NULL,
+        acao          VARCHAR(12)  NOT NULL,
+        tipo          VARCHAR(10)  NOT NULL,
+        lancamento_id $ref             NULL,
+        resumo        VARCHAR(200) NOT NULL,
+        criado_em     $dataHora    NOT NULL,
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id)";
+
+    $tabelas['avisos_vistos'] = "
+        usuario_id $ref NOT NULL PRIMARY KEY,
+        ultimo_id  INT  NOT NULL";
 
     $tabelas['tentativas_login'] = "
         chave VARCHAR(120) NOT NULL PRIMARY KEY,

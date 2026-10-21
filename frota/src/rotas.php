@@ -96,12 +96,14 @@ function despacha(string $r, string $metodo)
 
         case 'GET resumo':
             return rotaResumo();
-        case 'GET historico':
-            return rotaHistorico();
-        case 'GET relatorio':
-            return rotaRelatorio();
-        case 'GET csv':
-            return rotaCsv();
+        case 'GET avisos':
+            return rotaAvisos();
+        case 'POST avisos-lidos':
+            return rotaAvisosLidos();
+        case 'GET pdf':
+            return rotaPdf();
+        case 'GET pdf-panorama':
+            return rotaPdfPanorama();
 
         case 'POST comprovante':
             return rotaEnviaComprovante();
@@ -415,7 +417,7 @@ function rotaNovaViagem(): array
     $usuarioId = $eu['papel'] === 'admin' && !empty($corpo['usuario_id'])
         ? campoId($corpo['usuario_id'], 'Motorista')
         : $eu['id'];
-    return ['id' => insere('viagens', [
+    $dados = [
         'usuario_id' => $usuarioId,
         'caminhao_id' => campoId($corpo['caminhao_id'] ?? null, 'Caminhão'),
         'origem' => campoTexto($corpo['origem'] ?? null, 'Saindo de', true, 80),
@@ -425,7 +427,11 @@ function rotaNovaViagem(): array
         'status' => 'aberta',
         'observacao' => campoTexto($corpo['observacao'] ?? null, 'Observação', false, 500),
         'criado_em' => agora(),
-    ])];
+    ];
+    $id = insere('viagens', $dados);
+    registraAviso($eu, 'abriu', 'viagem', null,
+        $dados['origem'] . ' → ' . $dados['destino'] . ' · saída ' . pdfData($dados['inicio']));
+    return ['id' => $id];
 }
 
 function rotaEditaViagem(int $id): array
@@ -615,7 +621,9 @@ function rotaNovoLancamento(): array
     $dados['criado_em'] = agora();
     $dados['criado_por'] = $eu['id'];
     $id = insere('lancamentos', $dados);
-    return umaLinha(SQL_LANCAMENTO . ' WHERE l.id = ?', [$id]);
+    $novo = umaLinha(SQL_LANCAMENTO . ' WHERE l.id = ?', [$id]);
+    registraAviso($eu, 'criou', $novo['tipo'], $id, resumoDoLancamento($novo));
+    return $novo;
 }
 
 function rotaEditaLancamento(int $id): array
@@ -632,7 +640,9 @@ function rotaEditaLancamento(int $id): array
     $dados['atualizado_em'] = agora();
     $dados['atualizado_por'] = $eu['id'];
     atualiza('lancamentos', $id, $dados);
-    return umaLinha(SQL_LANCAMENTO . ' WHERE l.id = ?', [$id]);
+    $editado = umaLinha(SQL_LANCAMENTO . ' WHERE l.id = ?', [$id]);
+    registraAviso($eu, 'editou', $editado['tipo'], $id, resumoDoLancamento($editado));
+    return $editado;
 }
 
 function rotaExcluiLancamento(int $id): array
@@ -645,20 +655,127 @@ function rotaExcluiLancamento(int $id): array
     if ($eu['papel'] !== 'admin' && (int) $atual['usuario_id'] !== $eu['id']) {
         throw new ErroDeUso('Você só pode excluir os seus próprios gastos.', 403);
     }
+    $completo = umaLinha(SQL_LANCAMENTO . ' WHERE l.id = ?', [$id]);
     consulta('DELETE FROM lancamentos WHERE id = ?', [$id]);
+    consulta('UPDATE avisos SET lancamento_id = NULL WHERE lancamento_id = ?', [$id]);
+    registraAviso($eu, 'excluiu', $atual['tipo'], null, resumoDoLancamento($completo));
     if (!empty($atual['comprovante']) && preg_match('/^[A-Za-z0-9._-]+$/', $atual['comprovante'])) {
         apagaComprovante($atual['comprovante']);
     }
     return ['ok' => true];
 }
 
-function rotaResumo(): array
+// Avisos: o que os motoristas fazem fica registrado para o proprietário acompanhar.
+function registraAviso(array $eu, string $acao, string $tipo, ?int $lancamentoId, string $resumo): void
 {
-    exigeAdmin();
-    $mes = mesValido($_GET['mes'] ?? '');
-    [$de, $ate] = limitesDoMes($mes);
-    $anterior = mesAnterior($mes);
-    [$deAnt, $ateAnt] = limitesDoMes($anterior);
+    if ($eu['papel'] === 'admin') {
+        return;
+    }
+    insere('avisos', [
+        'usuario_id' => $eu['id'],
+        'acao' => $acao,
+        'tipo' => $tipo,
+        'lancamento_id' => $lancamentoId,
+        'resumo' => mb_substr($resumo, 0, 200),
+        'criado_em' => agora(),
+    ]);
+}
+
+function resumoDoLancamento(array $l): string
+{
+    return $l['categoria'] . ($l['descricao'] ? ' — ' . $l['descricao'] : '')
+        . ' · ' . pdfReais((int) $l['valor_centavos']) . ' · ' . pdfData($l['data']);
+}
+
+function ultimoAvisoVisto(int $usuarioId): int
+{
+    $visto = umValor('SELECT ultimo_id FROM avisos_vistos WHERE usuario_id = ?', [$usuarioId]);
+    if ($visto === null) {
+        // Primeiro acesso: começa do zero, sem acusar o histórico antigo como novidade.
+        $visto = (int) umValor('SELECT COALESCE(MAX(id), 0) FROM avisos');
+        insere('avisos_vistos', ['usuario_id' => $usuarioId, 'ultimo_id' => $visto]);
+    }
+    return (int) $visto;
+}
+
+function rotaAvisos(): array
+{
+    $eu = exigeAdmin();
+    $visto = ultimoAvisoVisto($eu['id']);
+    $itens = todas(
+        'SELECT a.id, a.acao, a.tipo, a.lancamento_id, a.resumo, a.criado_em, u.nome AS motorista
+           FROM avisos a JOIN usuarios u ON u.id = a.usuario_id
+          ORDER BY a.id DESC LIMIT 40'
+    );
+    foreach ($itens as &$a) {
+        $a['novo'] = (int) $a['id'] > $visto;
+        $a['segundos'] = max(0, time() - strtotime((string) $a['criado_em']));
+    }
+    unset($a);
+    return [
+        'nao_lidos' => (int) umValor('SELECT COUNT(*) FROM avisos WHERE id > ?', [$visto]),
+        'ultimo_id' => (int) umValor('SELECT COALESCE(MAX(id), 0) FROM avisos'),
+        'itens' => $itens,
+    ];
+}
+
+function rotaAvisosLidos(): array
+{
+    $eu = exigeAdmin();
+    ultimoAvisoVisto($eu['id']);
+    $ultimo = (int) umValor('SELECT COALESCE(MAX(id), 0) FROM avisos');
+    consulta('UPDATE avisos_vistos SET ultimo_id = ? WHERE usuario_id = ?', [$ultimo, $eu['id']]);
+    return ['ok' => true];
+}
+
+const MESES_PT = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho',
+    'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+
+function mesPorExtenso(string $mes): string
+{
+    [$ano, $m] = explode('-', $mes);
+    return MESES_PT[(int) $m - 1] . " de $ano";
+}
+
+function periodoPorExtenso(string $deMes, string $ateMes): string
+{
+    return $deMes === $ateMes ? mesPorExtenso($deMes) : mesPorExtenso($deMes) . ' a ' . mesPorExtenso($ateMes);
+}
+
+function mesesEntre(string $deMes, string $ateMes): array
+{
+    $lista = [];
+    for ($m = $deMes; $m <= $ateMes; $m = date('Y-m', strtotime("$m-01 +1 month"))) {
+        $lista[] = $m;
+    }
+    return $lista;
+}
+
+// Período do panorama em meses (AAAA-MM). Sem nada informado, é o mês atual.
+function periodoPanorama(): array
+{
+    if (!empty($_GET['mes'])) {
+        $deMes = $ateMes = mesValido($_GET['mes']);
+    } else {
+        $deMes = mesValido($_GET['de'] ?? '');
+        $ateMes = mesValido($_GET['ate'] ?? '');
+    }
+    if ($deMes > $ateMes) {
+        [$deMes, $ateMes] = [$ateMes, $deMes];
+    }
+    if (count(mesesEntre($deMes, $ateMes)) > 36) {
+        throw new ErroDeUso('Escolha um período de até 36 meses.');
+    }
+    return [$deMes, $ateMes];
+}
+
+function dadosPanorama(string $deMes, string $ateMes): array
+{
+    $meses = mesesEntre($deMes, $ateMes);
+    $de = limitesDoMes($deMes)[0];
+    $ate = limitesDoMes($ateMes)[1];
+    $antAteMes = mesAnterior($deMes);
+    $antDeMes = date('Y-m', strtotime("$deMes-01 -" . count($meses) . ' month'));
 
     $totais = function (string $inicio, string $fim): array {
         $t = umaLinha(
@@ -694,25 +811,70 @@ function rotaResumo(): array
         );
     };
 
+    $coluna = sqlMes('data');
+    $porMes = [];
+    foreach (todas(
+        "SELECT $coluna AS mes,
+                COALESCE(SUM(CASE WHEN tipo = 'entrada' THEN valor_centavos ELSE 0 END), 0) AS entradas_centavos,
+                COALESCE(SUM(CASE WHEN tipo = 'saida'   THEN valor_centavos ELSE 0 END), 0) AS saidas_centavos,
+                COUNT(*) AS qtd
+           FROM lancamentos WHERE data BETWEEN ? AND ?
+          GROUP BY $coluna",
+        [$de, $ate]
+    ) as $l) {
+        $porMes[$l['mes']] = $l;
+    }
+    $serie = [];
+    foreach ($meses as $mes) {
+        $entradas = (int) ($porMes[$mes]['entradas_centavos'] ?? 0);
+        $saidas = (int) ($porMes[$mes]['saidas_centavos'] ?? 0);
+        $serie[] = [
+            'mes' => $mes,
+            'entradas_centavos' => $entradas,
+            'saidas_centavos' => $saidas,
+            'saldo_centavos' => $entradas - $saidas,
+            'qtd' => (int) ($porMes[$mes]['qtd'] ?? 0),
+        ];
+    }
+
+    $caminhoes = todas(
+        "SELECT cm.id, COALESCE(cm.placa, 'Sem caminhão') AS placa, cm.apelido,
+                COALESCE(SUM(CASE WHEN l.tipo = 'entrada' THEN l.valor_centavos ELSE 0 END), 0) AS entradas_centavos,
+                COALESCE(SUM(CASE WHEN l.tipo = 'saida'   THEN l.valor_centavos ELSE 0 END), 0) AS saidas_centavos,
+                COALESCE(SUM(CASE WHEN c.pede_litros = 1 THEN l.litros ELSE 0 END), 0) AS litros,
+                COALESCE(SUM(CASE WHEN c.pede_litros = 1 THEN l.valor_centavos ELSE 0 END), 0) AS combustivel_centavos,
+                COUNT(*) AS qtd
+           FROM lancamentos l
+           JOIN categorias c ON c.id = l.categoria_id
+           LEFT JOIN caminhoes cm ON cm.id = l.caminhao_id
+          WHERE l.data BETWEEN ? AND ?
+          GROUP BY cm.id, cm.placa, cm.apelido ORDER BY saidas_centavos DESC",
+        [$de, $ate]
+    );
+    foreach ($caminhoes as &$cm) {
+        $cm['km_rodados'] = $cm['id'] ? (int) umValor(
+            'SELECT COALESCE(SUM(km_final - km_inicial), 0) FROM viagens
+              WHERE caminhao_id = ? AND km_final IS NOT NULL AND km_inicial IS NOT NULL
+                AND inicio BETWEEN ? AND ?',
+            [$cm['id'], $de, $ate]
+        ) : 0;
+        $cm['saldo_centavos'] = (int) $cm['entradas_centavos'] - (int) $cm['saidas_centavos'];
+    }
+    unset($cm);
+
     return [
-        'mes' => $mes,
-        'mes_anterior' => $anterior,
+        'de' => $deMes,
+        'ate' => $ateMes,
+        'anterior_de' => $antDeMes,
+        'anterior_ate' => $antAteMes,
         'atual' => $totais($de, $ate),
-        'anterior' => $totais($deAnt, $ateAnt),
+        'anterior' => $totais(limitesDoMes($antDeMes)[0], limitesDoMes($antAteMes)[1]),
         'litros' => (float) $combustivel['litros'],
         'combustivel_centavos' => (int) $combustivel['centavos'],
+        'meses' => $serie,
         'saidas_por_categoria' => $porCategoria('saida'),
         'entradas_por_categoria' => $porCategoria('entrada'),
-        'por_caminhao' => todas(
-            "SELECT COALESCE(cm.placa, 'Sem caminhão') AS placa, cm.apelido,
-                    COALESCE(SUM(CASE WHEN l.tipo = 'entrada' THEN l.valor_centavos ELSE 0 END), 0) AS entradas_centavos,
-                    COALESCE(SUM(CASE WHEN l.tipo = 'saida'   THEN l.valor_centavos ELSE 0 END), 0) AS saidas_centavos,
-                    COUNT(*) AS qtd
-               FROM lancamentos l LEFT JOIN caminhoes cm ON cm.id = l.caminhao_id
-              WHERE l.data BETWEEN ? AND ?
-              GROUP BY cm.id, cm.placa, cm.apelido ORDER BY saidas_centavos DESC",
-            [$de, $ate]
-        ),
+        'por_caminhao' => $caminhoes,
         'por_motorista' => todas(
             "SELECT u.nome, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
                FROM lancamentos l JOIN usuarios u ON u.id = l.usuario_id
@@ -732,155 +894,213 @@ function rotaResumo(): array
     ];
 }
 
-function rotaHistorico(): array
+function rotaResumo(): array
 {
     exigeAdmin();
-    $meses = max(3, min((int) ($_GET['meses'] ?? 12), 36));
-    $primeiro = date('Y-m-01', strtotime('-' . ($meses - 1) . ' month'));
-    $coluna = sqlMes('data');
-    $linhas = todas(
-        "SELECT $coluna AS mes,
-                COALESCE(SUM(CASE WHEN tipo = 'entrada' THEN valor_centavos ELSE 0 END), 0) AS entradas_centavos,
-                COALESCE(SUM(CASE WHEN tipo = 'saida'   THEN valor_centavos ELSE 0 END), 0) AS saidas_centavos,
-                COUNT(*) AS qtd
-           FROM lancamentos WHERE data >= ?
-          GROUP BY $coluna ORDER BY mes",
-        [$primeiro]
-    );
-
-    $porMes = [];
-    foreach ($linhas as $l) {
-        $porMes[$l['mes']] = $l;
-    }
-    $saida = [];
-    for ($i = $meses - 1; $i >= 0; $i--) {
-        $mes = date('Y-m', strtotime("-$i month"));
-        $l = $porMes[$mes] ?? null;
-        $entradas = (int) ($l['entradas_centavos'] ?? 0);
-        $saidas = (int) ($l['saidas_centavos'] ?? 0);
-        $saida[] = [
-            'mes' => $mes,
-            'entradas_centavos' => $entradas,
-            'saidas_centavos' => $saidas,
-            'saldo_centavos' => $entradas - $saidas,
-            'qtd' => (int) ($l['qtd'] ?? 0),
-        ];
-    }
-    return ['meses' => $saida];
+    return dadosPanorama(...periodoPanorama());
 }
 
-function periodoRelatorio(): array
+function pdfReais(int $centavos): string
 {
-    $ate = !empty($_GET['ate']) ? campoData($_GET['ate'], 'Data final') : date('Y-m-t');
-    $de = !empty($_GET['de'])
-        ? campoData($_GET['de'], 'Data inicial')
-        : date('Y-m-01', strtotime($ate . ' -11 month'));
-    if ($de > $ate) {
-        throw new ErroDeUso('A data inicial não pode ser depois da data final.');
-    }
-    return [$de, $ate];
+    return ($centavos < 0 ? '-' : '') . 'R$ ' . number_format(abs($centavos) / 100, 2, ',', '.');
 }
 
-function rotaRelatorio(): array
+function pdfNumero(float $n, int $casas = 0): string
 {
-    exigeAdmin();
-    [$de, $ate] = periodoRelatorio();
-
-    $caminhoes = todas(
-        "SELECT cm.id, cm.placa, cm.apelido,
-                COALESCE(SUM(CASE WHEN l.tipo = 'entrada' THEN l.valor_centavos ELSE 0 END), 0) AS entradas_centavos,
-                COALESCE(SUM(CASE WHEN l.tipo = 'saida'   THEN l.valor_centavos ELSE 0 END), 0) AS saidas_centavos,
-                COALESCE(SUM(CASE WHEN c.pede_litros = 1 THEN l.litros ELSE 0 END), 0) AS litros,
-                COALESCE(SUM(CASE WHEN c.pede_litros = 1 THEN l.valor_centavos ELSE 0 END), 0) AS combustivel_centavos,
-                COUNT(l.id) AS qtd
-           FROM caminhoes cm
-           LEFT JOIN lancamentos l ON l.caminhao_id = cm.id AND l.data BETWEEN ? AND ?
-           LEFT JOIN categorias c ON c.id = l.categoria_id
-          GROUP BY cm.id, cm.placa, cm.apelido ORDER BY cm.placa",
-        [$de, $ate]
-    );
-
-    foreach ($caminhoes as &$cm) {
-        $km = umValor(
-            'SELECT COALESCE(SUM(km_final - km_inicial), 0) FROM viagens
-              WHERE caminhao_id = ? AND km_final IS NOT NULL AND km_inicial IS NOT NULL
-                AND inicio BETWEEN ? AND ?',
-            [$cm['id'], $de, $ate]
-        );
-        $cm['km_rodados'] = (int) $km;
-        $cm['saldo_centavos'] = (int) $cm['entradas_centavos'] - (int) $cm['saidas_centavos'];
-    }
-    unset($cm);
-
-    return [
-        'de' => $de,
-        'ate' => $ate,
-        'por_caminhao' => $caminhoes,
-        'saidas_por_categoria' => todas(
-            "SELECT c.nome, c.icone, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
-               FROM lancamentos l JOIN categorias c ON c.id = l.categoria_id
-              WHERE l.tipo = 'saida' AND l.data BETWEEN ? AND ?
-              GROUP BY c.id, c.nome, c.icone ORDER BY total_centavos DESC",
-            [$de, $ate]
-        ),
-        'entradas_por_categoria' => todas(
-            "SELECT c.nome, c.icone, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
-               FROM lancamentos l JOIN categorias c ON c.id = l.categoria_id
-              WHERE l.tipo = 'entrada' AND l.data BETWEEN ? AND ?
-              GROUP BY c.id, c.nome, c.icone ORDER BY total_centavos DESC",
-            [$de, $ate]
-        ),
-        'por_motorista' => todas(
-            "SELECT u.nome, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
-               FROM lancamentos l JOIN usuarios u ON u.id = l.usuario_id
-              WHERE l.tipo = 'saida' AND l.data BETWEEN ? AND ?
-              GROUP BY u.id, u.nome ORDER BY total_centavos DESC",
-            [$de, $ate]
-        ),
-    ];
+    return number_format($n, $casas, ',', '.');
 }
 
-function rotaCsv(): void
+function pdfData(?string $d): string
+{
+    return $d ? implode('/', array_reverse(explode('-', substr($d, 0, 10)))) : '';
+}
+
+function pdfCorSaldo(int $centavos): array
+{
+    return $centavos >= 0 ? PDF_VERDE : PDF_VERMELHO;
+}
+
+function pdfTabelaLancamentos(Pdf $pdf, array $itens): void
+{
+    $pdf->tabela(
+        [
+            ['Data', 44], ['Tipo', 32], ['Categoria', 64], ['Descrição', 90], ['Valor', 54, true],
+            ['Caminhão', 44], ['Motorista', 58], ['Viagem', 72], ['Litros', 30, true], ['Km', 34, true],
+            ['Onde foi', 60], ['Quem pagou', 58], ['Pagamento', 52], ['Observação', 94],
+        ],
+        array_map(fn ($l) => [
+            pdfData($l['data']),
+            $l['tipo'] === 'entrada' ? 'Entrada' : 'Saída',
+            (string) $l['categoria'],
+            (string) $l['descricao'],
+            [pdfReais((int) $l['valor_centavos']), $l['tipo'] === 'entrada' ? PDF_VERDE : PDF_VERMELHO],
+            (string) $l['placa'],
+            (string) $l['motorista'],
+            $l['viagem_origem'] ? $l['viagem_origem'] . ' > ' . $l['viagem_destino'] : '',
+            $l['litros'] !== null && $l['litros'] !== '' ? pdfNumero((float) $l['litros'], 2) : '',
+            $l['km'] !== null && $l['km'] !== '' ? pdfNumero((float) $l['km']) : '',
+            (string) $l['lugar'],
+            (string) $l['cliente'],
+            (string) $l['pagamento'],
+            (string) $l['observacao'],
+        ], $itens),
+        'Nenhum lançamento encontrado.'
+    );
+}
+
+function enviaPdf(Pdf $pdf, string $nome): void
+{
+    $geradoEm = (new DateTime('now', new DateTimeZone('America/Sao_Paulo')))->format('d/m/Y H:i');
+    $pdf->emCadaPagina(function (Pdf $p, int $n, int $total) use ($geradoEm) {
+        $y = PDF_ALTURA - PDF_MARGEM + 6;
+        $p->texto(PDF_MARGEM, $y, "Gerado em $geradoEm", 7, false, PDF_CINZA);
+        $p->celula(PDF_MARGEM, $y, PDF_LARGURA - 2 * PDF_MARGEM, "Página $n de $total", 7, false, true, PDF_CINZA);
+    });
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: attachment; filename="' . $nome . '"');
+    header('Cache-Control: no-store');
+    echo $pdf->gera();
+    exit;
+}
+
+function rotaPdf(): void
 {
     exigeAdmin();
     [$where, $args] = filtrosLancamento();
     $itens = todas(SQL_LANCAMENTO . " $where ORDER BY l.data, l.id", $args);
 
-    $nome = 'lancamentos-' . date('Y-m-d') . '.csv';
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename="' . $nome . '"');
-    header('Cache-Control: no-store');
-
-    $linha = function (array $campos): string {
-        $saida = [];
-        foreach ($campos as $c) {
-            $saida[] = '"' . str_replace('"', '""', (string) $c) . '"';
-        }
-        return implode(';', $saida) . "\r\n";
-    };
-
-    echo "\xEF\xBB\xBF";
-    echo $linha(['Data', 'Tipo', 'Categoria', 'Descrição', 'Valor (R$)', 'Caminhão', 'Motorista',
-        'Viagem', 'Litros', 'Km', 'Onde foi', 'Quem pagou', 'Pagamento', 'Observação']);
-    foreach ($itens as $l) {
-        echo $linha([
-            $l['data'],
-            $l['tipo'] === 'entrada' ? 'Entrada' : 'Saída',
-            $l['categoria'],
-            $l['descricao'],
-            number_format(((int) $l['valor_centavos']) / 100, 2, ',', ''),
-            $l['placa'],
-            $l['motorista'],
-            $l['viagem_origem'] ? $l['viagem_origem'] . ' > ' . $l['viagem_destino'] : '',
-            $l['litros'],
-            $l['km'],
-            $l['lugar'],
-            $l['cliente'],
-            $l['pagamento'],
-            $l['observacao'],
-        ]);
+    if (!empty($_GET['mes'])) {
+        [$de, $ate] = limitesDoMes(mesValido($_GET['mes']));
+    } else {
+        $de = $_GET['de'] ?? ($itens[0]['data'] ?? '');
+        $ate = $_GET['ate'] ?? ($itens ? end($itens)['data'] : '');
     }
-    exit;
+    $periodo = $de || $ate ? '  ·  Período: ' . pdfData($de) . ' a ' . pdfData($ate) : '';
+
+    $entradas = 0;
+    $saidas = 0;
+    foreach ($itens as $l) {
+        $l['tipo'] === 'entrada' ? $entradas += (int) $l['valor_centavos'] : $saidas += (int) $l['valor_centavos'];
+    }
+
+    $pdf = new Pdf();
+    $pdf->novaPagina();
+    $pdf->cabecalho('Lançamentos', NOME_SISTEMA . $periodo);
+    $pdf->indicadores([
+        ['Entradas', pdfReais($entradas), PDF_VERDE],
+        ['Saídas', pdfReais($saidas), PDF_VERMELHO],
+        ['Saldo', pdfReais($entradas - $saidas), pdfCorSaldo($entradas - $saidas)],
+        ['Lançamentos', (string) count($itens), PDF_TINTA],
+    ]);
+    $pdf->y += 6;
+    pdfTabelaLancamentos($pdf, $itens);
+    enviaPdf($pdf, 'lancamentos-' . date('Y-m-d') . '.pdf');
+}
+
+function rotaPdfPanorama(): void
+{
+    exigeAdmin();
+    [$deMes, $ateMes] = periodoPanorama();
+    $d = dadosPanorama($deMes, $ateMes);
+    $a = $d['atual'];
+    $varios = count($d['meses']) > 1;
+
+    $pdf = new Pdf();
+    $pdf->novaPagina();
+    $pdf->cabecalho('Panorama', NOME_SISTEMA . '  ·  ' . periodoPorExtenso($deMes, $ateMes));
+
+    $pdf->indicadores([
+        ['Entradas (fretes)', pdfReais($a['entradas_centavos']), PDF_VERDE],
+        ['Saídas (gastos)', pdfReais($a['saidas_centavos']), PDF_VERMELHO],
+        ['Saldo', pdfReais($a['saldo_centavos']), pdfCorSaldo($a['saldo_centavos'])],
+        ['Lançamentos', (string) $a['qtd'], PDF_TINTA],
+        ['Viagens abertas hoje', (string) $d['viagens_abertas'], PDF_TINTA],
+    ]);
+    $litros = $d['litros'];
+    $comMovimento = count(array_filter($d['meses'], fn ($m) => $m['qtd'] > 0)) ?: 1;
+    $pdf->indicadores(array_merge([
+        ['Combustível', pdfReais($d['combustivel_centavos']), PDF_TINTA],
+        ['Litros', pdfNumero($litros, 2), PDF_TINTA],
+        ['Preço médio do litro', $litros > 0 ? pdfReais((int) round($d['combustivel_centavos'] / $litros)) : '—', PDF_TINTA],
+    ], $varios ? [
+        ['Saldo médio por mês', pdfReais((int) round($a['saldo_centavos'] / $comMovimento)),
+            pdfCorSaldo($a['saldo_centavos'])],
+    ] : []));
+
+    $periodoAnterior = periodoPorExtenso($d['anterior_de'], $d['anterior_ate']);
+    $diferenca = $a['saldo_centavos'] - $d['anterior']['saldo_centavos'];
+    $pdf->texto(PDF_MARGEM, $pdf->y + 4, $d['anterior']['qtd']
+        ? 'Comparado a ' . $periodoAnterior . ' (saldo de ' . pdfReais($d['anterior']['saldo_centavos']) . '): '
+            . pdfReais(abs($diferenca)) . ($diferenca >= 0 ? ' melhor.' : ' pior.')
+        : "Sem lançamentos em $periodoAnterior para comparar.", 8, false, PDF_CINZA);
+    $pdf->y += 10;
+
+    if ($varios) {
+        $pdf->secao('Mês a mês');
+        $pdf->tabela(
+            [['Mês', 130], ['Entradas', 100, true], ['Saídas', 100, true], ['Saldo', 100, true], ['Lançamentos', 70, true]],
+            array_map(fn ($m) => [
+                mesPorExtenso($m['mes']),
+                pdfReais($m['entradas_centavos']),
+                pdfReais($m['saidas_centavos']),
+                [pdfReais($m['saldo_centavos']), pdfCorSaldo($m['saldo_centavos'])],
+                (string) $m['qtd'],
+            ], $d['meses'])
+        );
+    }
+
+    $pdf->secao('Por caminhão');
+    $pdf->tabela(
+        [['Caminhão', 150], ['Entradas', 85, true], ['Saídas', 85, true], ['Saldo', 85, true],
+            ['Combustível', 85, true], ['Litros', 60, true], ['R$/litro', 60, true], ['Km', 60, true], ['Km/litro', 60, true]],
+        array_map(function ($c) {
+            $litros = (float) $c['litros'];
+            $km = (int) $c['km_rodados'];
+            return [
+                $c['placa'] . ($c['apelido'] ? ' — ' . $c['apelido'] : ''),
+                pdfReais((int) $c['entradas_centavos']),
+                pdfReais((int) $c['saidas_centavos']),
+                [pdfReais($c['saldo_centavos']), pdfCorSaldo($c['saldo_centavos'])],
+                pdfReais((int) $c['combustivel_centavos']),
+                $litros ? pdfNumero($litros, 2) : '—',
+                $litros ? pdfReais((int) round($c['combustivel_centavos'] / $litros)) : '—',
+                $km ? pdfNumero($km) : '—',
+                $km && $litros ? pdfNumero($km / $litros, 2) : '—',
+            ];
+        }, $d['por_caminhao'])
+    );
+
+    $porCategoria = function (array $itens, int $total, string $rotulo) use ($pdf) {
+        $pdf->tabela(
+            [[$rotulo, 200], ['Lançamentos', 70, true], ['Total', 100, true], ['% do total', 70, true]],
+            array_map(fn ($i) => [
+                (string) $i['nome'],
+                (string) $i['qtd'],
+                pdfReais((int) $i['total_centavos']),
+                $total ? pdfNumero($i['total_centavos'] / $total * 100, 1) . '%' : '—',
+            ], $itens)
+        );
+    };
+    $pdf->secao('Saídas por categoria');
+    $porCategoria($d['saidas_por_categoria'], $a['saidas_centavos'], 'Categoria');
+    $pdf->secao('Entradas por tipo de frete');
+    $porCategoria($d['entradas_por_categoria'], $a['entradas_centavos'], 'Tipo de frete');
+
+    $pdf->secao('Gastos por motorista');
+    $pdf->tabela(
+        [['Motorista', 200], ['Lançamentos', 70, true], ['Total', 100, true]],
+        array_map(fn ($i) => [(string) $i['nome'], (string) $i['qtd'], pdfReais((int) $i['total_centavos'])],
+            $d['por_motorista'])
+    );
+
+    $pdf->novaPagina();
+    $pdf->secao('Lançamentos do período');
+    pdfTabelaLancamentos($pdf, todas(
+        SQL_LANCAMENTO . ' WHERE l.data BETWEEN ? AND ? ORDER BY l.data, l.id',
+        [limitesDoMes($deMes)[0], limitesDoMes($ateMes)[1]]
+    ));
+
+    enviaPdf($pdf, 'panorama-' . ($deMes === $ateMes ? $deMes : "$deMes-a-$ateMes") . '.pdf');
 }
 
 function pastaUploads(): string

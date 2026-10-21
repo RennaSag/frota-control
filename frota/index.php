@@ -1,7 +1,7 @@
 <?php
 require __DIR__ . '/config.php';
 $nome = htmlspecialchars(NOME_SISTEMA, ENT_QUOTES, 'UTF-8');
-$v = '1.6.0';
+$v = '1.8.0';
 ?>
 <!doctype html>
 <html lang="pt-BR">

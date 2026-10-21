@@ -12,7 +12,7 @@ navegador — não precisa instalar aplicativo.
 | Lançar entradas (fretes) | **não** | sim |
 | Ver lançamentos | só os próprios | todos |
 | Editar / excluir | só os próprios gastos | **tudo** |
-| Panorama e relatórios | não | sim |
+| Panorama | não | sim |
 | Cadastros (motoristas, caminhões, categorias) | não | sim |
 
 O motorista entra e já cai na tela de registrar gasto. Ele nunca vê o faturamento da
@@ -71,6 +71,8 @@ hospedagem na internet — veja "Levar para a internet" no fim deste arquivo.
 1. Entra no site (fica logado por 30 dias).
 2. Se está começando uma viagem (opcional): **Viagens → Nova viagem** — de onde,
    para onde, caminhão e km do painel. Serve para somar o custo de cada viagem.
+   Também dá para abrir a viagem na hora de lançar: no campo **Viagem**, toque em
+   **+ Registrar nova viagem**; ela é criada e já fica escolhida no lançamento.
 3. A cada gasto: **Registrar** → dia, caminhão, viagem, toca no tipo de gasto,
    digita o valor e salva. Pode tirar foto da nota.
    - Em **Abastecimento** aparecem litros e km, e o sistema mostra quanto deu o litro.
@@ -81,18 +83,23 @@ Ele pode corrigir ou apagar um gasto que ele mesmo lançou em **Meus gastos**.
 
 ## Como o proprietário usa
 
-- **Panorama** — o mês atual: saldo (entradas menos saídas), comparação com o mês
-  anterior, gastos por dia, saídas por categoria, entradas por tipo de frete,
-  tabela por caminhão, gastos por motorista, total de combustível, litros e preço
-  médio do litro.
+- **Panorama** — abre sempre no mês atual; dá para escolher outro mês ou um período
+  de vários meses (de/até, ou atalhos como "Últimos 3 meses" e "Este ano"). Mostra
+  o saldo (entradas menos saídas) comparado ao período anterior, gastos por dia
+  (um mês) ou gráfico e tabela mês a mês (vários meses), desempenho de cada
+  caminhão (entradas, saídas, saldo, combustível, litros, R$/litro, km e km/litro),
+  saídas por categoria, entradas por tipo de frete e gastos por motorista. O botão
+  **Baixar PDF do panorama** gera tudo isso em PDF, junto com a lista de
+  lançamentos do período.
 - **Lançamentos** — tudo que entrou e saiu, com filtros por mês, tipo, motorista,
   caminhão e categoria. Aqui você lança **entradas de frete** e também gastos no
-  lugar de um motorista, edita e exclui qualquer lançamento, e baixa a planilha
-  (`.csv`, abre no Excel).
-- **Relatórios** — histórico de 3, 6, 12 ou 24 meses: gráfico de entradas e saídas
-  mês a mês com o saldo de cada mês, tabela mês a mês, desempenho de cada caminhão
-  (entradas, saídas, saldo, combustível, litros, R$/litro, km e km/litro) e os
-  totais por categoria e por motorista no período.
+  lugar de um motorista, edita e exclui qualquer lançamento, e baixa o relatório
+  em PDF.
+- **Avisos (sino no topo)** — tudo que os motoristas registram, editam ou excluem,
+  e as viagens que eles abrem. O número vermelho mostra quantos avisos são novos.
+  Com o app aberto, ele confere a cada minuto e mostra um recado quando chega
+  algo novo. Tocando em "Ativar notificações", o aviso aparece também na tela do
+  aparelho (enquanto o app estiver aberto ou em segundo plano no navegador).
 - **Viagens** — todas as viagens, com gasto, frete e saldo de cada uma.
 - **Ajustes** — motoristas e acessos (criar, bloquear, trocar senha, promover a
   proprietário), caminhões e categorias.
