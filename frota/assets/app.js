@@ -454,7 +454,11 @@ function camposLancamento(tipo, l = {}) {
     <div class="campo opcional">
       <label for="c-foto">${entrada ? 'Foto do comprovante' : 'Foto da nota'}</label>
       <p class="dica">Tire a foto do cupom, nota ou comprovante.</p>
-      <input id="c-foto" type="file" accept="image/*,application/pdf" capture="environment">
+      <label class="arquivo" for="c-foto">
+        <span class="btn pequeno" aria-hidden="true">Escolher foto</span>
+        <span data-nome-arquivo>Nenhuma foto escolhida</span>
+      </label>
+      <input id="c-foto" class="escondido" type="file" accept="image/*,application/pdf" capture="environment">
       <input type="hidden" name="comprovante" value="${esc(l.comprovante || '')}">
       <p class="aviso ok oculto" data-se="foto"></p>
     </div>`;
@@ -522,15 +526,21 @@ function ligaCamposLancamento(form) {
   form.elements.litros?.addEventListener('input', atualizaPrecoLitro);
 
   const campoFoto = form.querySelector('#c-foto');
+  const nomeFoto = form.querySelector('[data-nome-arquivo]');
+  const limpaFoto = () => {
+    campoFoto.value = '';
+    nomeFoto.textContent = 'Nenhuma foto escolhida';
+  };
   campoFoto.addEventListener('change', async () => {
     if (!campoFoto.files?.[0]) return;
+    nomeFoto.textContent = campoFoto.files[0].name;
     avisoFoto.textContent = 'Enviando foto…';
     avisoFoto.classList.remove('oculto');
     const arquivo = await reduzFoto(campoFoto.files[0]);
     if (arquivo.size > 8 * 1024 * 1024) {
       avisoFoto.classList.add('oculto');
       mostraErro(form, 'A foto é muito grande (máximo 8 MB).');
-      campoFoto.value = '';
+      limpaFoto();
       return;
     }
     try {
@@ -548,7 +558,7 @@ function ligaCamposLancamento(form) {
     } catch (erro) {
       avisoFoto.classList.add('oculto');
       mostraErro(form, erro.message || 'Não foi possível enviar a foto.');
-      campoFoto.value = '';
+      limpaFoto();
     }
   });
 
