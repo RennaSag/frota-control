@@ -551,3 +551,47 @@ table.simples td:last-child { font-weight: 500; }
 
 .carregando { text-align: center; color: var(--tinta-3); padding: 40px 0; }
 .oculto { display: none !important; }
+
+.escolha button small { display: block; font-size: .78rem; font-weight: 400; color: var(--tinta-3); margin-top: 2px; }
+.escolha button:disabled { cursor: not-allowed; opacity: .6; }
+
+.subtitulo {
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--tinta-3);
+  margin: 18px 0 8px;
+}
+.cartao > .ajuda + div > .subtitulo:first-child { margin-top: 0; }
+
+.item.fixo { cursor: default; flex-wrap: wrap; }
+.item.fixo:hover { background: var(--superficie); }
+.item .corpo .etiqueta { margin-top: 5px; }
+.acoes-item { display: flex; gap: 6px; margin-left: auto; }
+
+@media (max-width: 640px) {
+  main { padding: 16px 12px; }
+  .cartao, .destaque { padding: 16px; }
+  .titulo-secao h1 { font-size: 1.25rem; }
+
+  .grade { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .mini { padding: 11px 12px; }
+  .mini .numero { font-size: 1.05rem; }
+
+  .item { padding: 11px 12px; gap: 10px; }
+  .item .dinheiro { font-size: .95rem; }
+
+  table.dados thead { display: none; }
+  table.dados, table.dados tbody, table.dados tr { display: block; width: 100%; }
+  table.dados tbody tr { padding: 10px 0; }
+  table.dados td {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 3px 0;
+    white-space: normal;
+  }
+  table.dados td::before { content: attr(data-rotulo); color: var(--tinta-3); font-size: .82rem; }
+  table.dados td:first-child { display: block; font-weight: 600; padding-bottom: 6px; }
+  table.dados td:first-child::before { content: none; }
+  table.dados tr.sem-movimento { display: none; }
+}

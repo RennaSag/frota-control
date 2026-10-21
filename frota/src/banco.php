@@ -303,14 +303,12 @@ function semeia(PDO $pdo): void
         ['Outra entrada',            'entrada', 'plus',     0, 1, 999],
     ];
 
-    $existe = $pdo->prepare('SELECT id FROM categorias WHERE nome = ? AND tipo = ?');
-    $nova = $pdo->prepare(
-        'INSERT INTO categorias (nome, tipo, icone, pede_litros, pede_descricao, ordem, ativo)
-         VALUES (?, ?, ?, ?, ?, ?, 1)'
-    );
-    foreach ($categorias as $c) {
-        $existe->execute([$c[0], $c[1]]);
-        if ($existe->fetchColumn() === false) {
+    if ((int) $pdo->query('SELECT COUNT(*) FROM categorias')->fetchColumn() === 0) {
+        $nova = $pdo->prepare(
+            'INSERT INTO categorias (nome, tipo, icone, pede_litros, pede_descricao, ordem, ativo)
+             VALUES (?, ?, ?, ?, ?, ?, 1)'
+        );
+        foreach ($categorias as $c) {
             $nova->execute($c);
         }
     }

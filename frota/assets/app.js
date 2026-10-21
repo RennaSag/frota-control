@@ -903,8 +903,8 @@ async function telaViagens(alvo) {
                   ${ehAdmin() ? ` • ${esc(v.motorista)}` : ''}
                   • gastos ${dinheiro(v.saidas_centavos)}
                 </small>
+                ${v.status === 'aberta' ? '<span class="etiqueta aberta">Em andamento</span>' : ''}
               </span>
-              ${v.status === 'aberta' ? '<span class="etiqueta aberta">Em andamento</span>' : ''}
               ${ehAdmin() ? `
                 <span class="dinheiro ${saldo >= 0 ? 'entrada' : ''}">
                   ${saldo >= 0 ? '' : '−'}${dinheiro(Math.abs(saldo))}
@@ -1109,6 +1109,18 @@ async function abreViagem(v, aoConcluir) {
   });
 }
 
+function ajustaPainel(raiz) {
+  raiz.querySelectorAll('table.dados').forEach((tabela) => {
+    const titulos = [...tabela.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+    tabela.querySelectorAll('tbody tr').forEach((tr) => {
+      [...tr.children].forEach((td, i) => { if (titulos[i]) td.dataset.rotulo = titulos[i]; });
+    });
+  });
+  raiz.querySelectorAll('.grafico-meses').forEach((grafico) => {
+    grafico.parentElement.scrollLeft = grafico.parentElement.scrollWidth;
+  });
+}
+
 function barras(itens, rotulo = (i) => esc(i.nome)) {
   if (!itens.length) return '<p class="ajuda">Sem lançamentos neste período.</p>';
   const maior = Math.max(...itens.map((i) => Number(i.total_centavos)));
@@ -1308,6 +1320,7 @@ async function telaPanorama(alvo) {
           ${barras(r.por_motorista, (i) => esc(i.nome))}
         </div>
       </div>`;
+    ajustaPainel(painel);
   };
 
   alvo.querySelector('#p-seletor').onchange = (e) => {
@@ -1397,7 +1410,7 @@ async function telaRelatorios(alvo) {
               </thead>
               <tbody>
                 ${[...historico.meses].reverse().map((m) => `
-                  <tr>
+                  <tr${m.qtd ? "" : " class=\"sem-movimento\""}>
                     <td>${mesCurto(m.mes)}</td>
                     <td>${dinheiro(m.entradas_centavos)}</td>
                     <td>${dinheiro(m.saidas_centavos)}</td>
@@ -1464,6 +1477,7 @@ async function telaRelatorios(alvo) {
           ${barras(relatorio.por_motorista, (i) => esc(i.nome))}
         </div>
       </div>`;
+    ajustaPainel(painel);
   };
 
   const seletor = alvo.querySelector('#r-meses');
@@ -1501,11 +1515,10 @@ async function telaAjustes(alvo) {
         </div>
         <div class="cartao">
           <h2>Categorias</h2>
-          <p class="ajuda">Além das que já vêm prontas, você pode criar outras.</p>
-          <div class="lista" id="lista-categorias"></div>
+          <p class="ajuda">Além das que já vêm prontas, você pode criar, editar e excluir outras.</p>
+          <div id="lista-categorias"></div>
           <div class="acoes" style="margin-top:14px">
-            <button class="btn principal" type="button" id="b-cat-saida">Nova categoria de gasto</button>
-            <button class="btn principal" type="button" id="b-cat-entrada">Nova categoria de entrada</button>
+            <button class="btn principal" type="button" id="b-categoria">Nova categoria</button>
           </div>
         </div>` : ''}
       <form class="cartao" novalidate>
@@ -1576,15 +1589,30 @@ async function telaAjustes(alvo) {
         </button>`).join('')
       : '<div class="vazio">Nenhum caminhão cadastrado.</div>';
 
-    document.getElementById('lista-categorias').innerHTML = categorias.map((c) => `
-      <button class="item" type="button" data-categoria="${c.id}">
-        <span class="corpo">
-          <strong>${esc(c.nome)}</strong>
-          <small>${c.tipo === 'entrada' ? 'entrada (dinheiro que entra)' : 'gasto (dinheiro que sai)'}</small>
-        </span>
-        ${Number(c.ativo) ? '' : '<span class="etiqueta inativo">escondida</span>'}
-        <span class="seta" aria-hidden="true">›</span>
-      </button>`).join('');
+    document.getElementById('lista-categorias').innerHTML = [['saida', 'Gastos'], ['entrada', 'Entradas']]
+      .map(([tipo, titulo]) => {
+        const doTipo = categorias.filter((c) => c.tipo === tipo);
+        if (!doTipo.length) return '';
+        return `
+          <h3 class="subtitulo">${titulo}</h3>
+          <div class="lista">
+            ${doTipo.map((c) => {
+              const qtd = Number(c.qtd_lancamentos) || 0;
+              return `
+              <div class="item fixo">
+                <span class="corpo">
+                  <strong>${esc(c.nome)}</strong>
+                  <small>${qtd ? `${qtd} ${qtd === 1 ? 'lançamento' : 'lançamentos'}` : 'sem lançamentos'}</small>
+                  ${Number(c.ativo) ? '' : '<span class="etiqueta inativo">escondida</span>'}
+                </span>
+                <span class="acoes-item">
+                  <button class="btn pequeno" type="button" data-editar-categoria="${c.id}">Editar</button>
+                  <button class="btn pequeno perigo" type="button" data-excluir-categoria="${c.id}">Excluir</button>
+                </span>
+              </div>`;
+            }).join('')}
+          </div>`;
+      }).join('');
 
     alvo.querySelectorAll('[data-usuario]').forEach((b) => {
       const u = usuarios.find((x) => Number(x.id) === Number(b.dataset.usuario));
@@ -1594,16 +1622,18 @@ async function telaAjustes(alvo) {
       const c = caminhoes.find((x) => Number(x.id) === Number(b.dataset.caminhao));
       b.onclick = () => formCaminhao(c, atualiza);
     });
-    alvo.querySelectorAll('[data-categoria]').forEach((b) => {
-      const c = categorias.find((x) => Number(x.id) === Number(b.dataset.categoria));
-      b.onclick = () => formCategoria(c, null, atualiza);
+    const categoria = (id) => categorias.find((x) => Number(x.id) === Number(id));
+    alvo.querySelectorAll('[data-editar-categoria]').forEach((b) => {
+      b.onclick = () => formCategoria(categoria(b.dataset.editarCategoria), atualiza);
+    });
+    alvo.querySelectorAll('[data-excluir-categoria]').forEach((b) => {
+      b.onclick = () => excluiCategoria(categoria(b.dataset.excluirCategoria), atualiza);
     });
   };
 
   alvo.querySelector('#b-usuario').onclick = () => formUsuario(null, atualiza);
   alvo.querySelector('#b-caminhao').onclick = () => formCaminhao(null, atualiza);
-  alvo.querySelector('#b-cat-saida').onclick = () => formCategoria(null, 'saida', atualiza);
-  alvo.querySelector('#b-cat-entrada').onclick = () => formCategoria(null, 'entrada', atualiza);
+  alvo.querySelector('#b-categoria').onclick = () => formCategoria(null, atualiza);
   await atualiza();
 }
 
@@ -1708,21 +1738,33 @@ function formCaminhao(c, aoConcluir) {
   });
 }
 
-function formCategoria(c, tipoNovo, aoConcluir) {
+const EXEMPLOS_CATEGORIA = {
+  saida: 'Ex.: rastreador, contador, estacionamento.',
+  entrada: 'Ex.: frete de madeira, aluguel de carreta.',
+};
+
+function formCategoria(c, aoConcluir) {
   const novo = !c;
-  const tipo = c?.tipo || tipoNovo || 'saida';
-  const { elemento, fechar } = janela(
-    novo ? (tipo === 'entrada' ? 'Nova categoria de entrada' : 'Nova categoria de gasto')
-      : `Editar ${c.nome}`,
-    `<form novalidate>
+  const tipo = c?.tipo || 'saida';
+  const travada = !novo && Number(c.qtd_lancamentos) > 0;
+  const { elemento, fechar } = janela(novo ? 'Nova categoria' : `Editar ${c.nome}`, `
+    <form novalidate>
+      <div class="campo">
+        <label>Tipo</label>
+        ${travada ? '<p class="dica">Já tem lançamentos, por isso o tipo não pode mudar.</p>' : ''}
+        <div class="escolha" role="group">
+          ${[['saida', 'Gasto', 'dinheiro que sai'], ['entrada', 'Entrada', 'dinheiro que entra']].map(([v, nome, dica]) => `
+            <button type="button" data-tipo="${v}" aria-pressed="${tipo === v}" ${travada ? 'disabled' : ''}>
+              ${nome}<small>${dica}</small>
+            </button>`).join('')}
+        </div>
+        <input type="hidden" name="tipo" value="${tipo}">
+      </div>
       <div class="campo">
         <label for="k-nome">Nome da categoria</label>
-        <p class="dica">${tipo === 'entrada'
-          ? 'Ex.: frete de madeira, aluguel de carreta.'
-          : 'Ex.: rastreador, contador, estacionamento.'}</p>
+        <p class="dica" data-exemplo>${EXEMPLOS_CATEGORIA[tipo]}</p>
         <input id="k-nome" name="nome" required maxlength="40" value="${esc(c?.nome || '')}">
       </div>
-      <input type="hidden" name="tipo" value="${tipo}">
       ${novo ? '' : `
         <div class="campo">
           <label for="k-ativo">Situação</label>
@@ -1735,10 +1777,16 @@ function formCategoria(c, tipoNovo, aoConcluir) {
         <button class="btn" type="button" data-cancelar>Cancelar</button>
         <button class="btn principal" type="submit">Salvar</button>
       </div>
-    </form>`
-  );
+    </form>`);
   const form = elemento.querySelector('form');
   form.querySelector('[data-cancelar]').onclick = fechar;
+  form.querySelectorAll('[data-tipo]').forEach((b) => {
+    b.onclick = () => {
+      form.querySelectorAll('[data-tipo]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      form.elements.tipo.value = b.dataset.tipo;
+      form.querySelector('[data-exemplo]').textContent = EXEMPLOS_CATEGORIA[b.dataset.tipo];
+    };
+  });
   aoEnviar(form, async (dados) => {
     dados.ativo = dados.ativo === undefined ? true : dados.ativo === '1';
     if (novo) await api('POST', 'categorias', {}, dados);
@@ -1747,6 +1795,40 @@ function formCategoria(c, tipoNovo, aoConcluir) {
     recado('Categoria salva.');
     await aoConcluir?.();
   });
+}
+
+async function excluiCategoria(c, aoConcluir) {
+  const qtd = Number(c.qtd_lancamentos) || 0;
+  if (qtd > 0) {
+    const { elemento, fechar } = janela('Não é possível excluir', `
+      <div class="aviso info">
+        A categoria "${esc(c.nome)}" tem ${qtd} ${qtd === 1 ? 'lançamento' : 'lançamentos'}
+        e não pode ser apagada sem perder esse histórico.
+      </div>
+      ${Number(c.ativo) ? `
+        <p class="ajuda">Você pode escondê-la: ela some da hora de lançar, mas os lançamentos
+        antigos continuam nos relatórios.</p>` : '<p class="ajuda">Ela já está escondida.</p>'}
+      <div class="acoes fim">
+        <button class="btn" type="button" data-cancelar>${Number(c.ativo) ? 'Cancelar' : 'Fechar'}</button>
+        ${Number(c.ativo) ? '<button class="btn principal" type="button" data-esconder>Esconder categoria</button>' : ''}
+      </div>`);
+    elemento.querySelector('[data-cancelar]').onclick = fechar;
+    elemento.querySelector('[data-esconder]')?.addEventListener('click', async () => {
+      await api('PUT', 'categoria', { id: c.id }, { nome: c.nome, tipo: c.tipo, ativo: false });
+      fechar();
+      recado('Categoria escondida.');
+      await aoConcluir?.();
+    });
+    return;
+  }
+  if (!confirm(`Excluir a categoria "${c.nome}"? Não dá para desfazer.`)) return;
+  try {
+    await api('DELETE', 'categoria', { id: c.id });
+    recado('Categoria excluída.');
+    await aoConcluir?.();
+  } catch (erro) {
+    recado(erro.message);
+  }
 }
 
 (async function inicia() {

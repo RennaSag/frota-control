@@ -63,6 +63,8 @@ function despacha(string $r, string $metodo)
             return rotaNovaCategoria();
         case 'PUT categoria':
             return rotaEditaCategoria(campoId($q['id'] ?? null, 'Categoria', true));
+        case 'DELETE categoria':
+            return rotaExcluiCategoria(campoId($q['id'] ?? null, 'Categoria', true));
 
         case 'GET viagens':
             return rotaViagens();
@@ -282,11 +284,19 @@ function rotaCategorias(): array
         $args[] = $_GET['tipo'];
     }
     $where = $cond ? 'WHERE ' . implode(' AND ', $cond) : '';
+    $qtd = $eu['papel'] === 'admin'
+        ? ', (SELECT COUNT(*) FROM lancamentos l WHERE l.categoria_id = categorias.id) AS qtd_lancamentos'
+        : '';
     return todas(
-        "SELECT id, nome, tipo, icone, pede_litros, pede_descricao, ordem, ativo
+        "SELECT id, nome, tipo, icone, pede_litros, pede_descricao, ordem, ativo $qtd
            FROM categorias $where ORDER BY tipo, ativo DESC, ordem, nome",
         $args
     );
+}
+
+function qtdLancamentosDaCategoria(int $id): int
+{
+    return (int) umValor('SELECT COUNT(*) FROM lancamentos WHERE categoria_id = ?', [$id]);
 }
 
 function rotaNovaCategoria(): array
@@ -318,14 +328,44 @@ function rotaEditaCategoria(int $id): array
         throw new ErroDeUso('Categoria não encontrada.', 404);
     }
     $nome = campoTexto($corpo['nome'] ?? null, 'Nome', true, 40);
+    $tipo = in_array($corpo['tipo'] ?? '', ['entrada', 'saida'], true) ? $corpo['tipo'] : $cat['tipo'];
+    if ($tipo !== $cat['tipo'] && qtdLancamentosDaCategoria($id) > 0) {
+        throw new ErroDeUso(
+            'Esta categoria já tem lançamentos, por isso não pode mudar entre gasto e entrada. '
+            . 'Crie uma categoria nova do outro tipo.'
+        );
+    }
     $igual = umValor(
         'SELECT id FROM categorias WHERE nome = ? AND tipo = ? AND id <> ?',
-        [$nome, $cat['tipo'], $id]
+        [$nome, $tipo, $id]
     );
     if ($igual !== null) {
         throw new ErroDeUso('Já existe uma categoria com esse nome.');
     }
-    atualiza('categorias', $id, ['nome' => $nome, 'ativo' => campoSimNao($corpo['ativo'] ?? null)]);
+    atualiza('categorias', $id, [
+        'nome' => $nome,
+        'tipo' => $tipo,
+        'ativo' => campoSimNao($corpo['ativo'] ?? null),
+    ]);
+    return ['ok' => true];
+}
+
+function rotaExcluiCategoria(int $id): array
+{
+    exigeAdmin();
+    if (umValor('SELECT id FROM categorias WHERE id = ?', [$id]) === null) {
+        throw new ErroDeUso('Categoria não encontrada.', 404);
+    }
+    $qtd = qtdLancamentosDaCategoria($id);
+    if ($qtd > 0) {
+        throw new ErroDeUso(
+            "Esta categoria tem $qtd " . ($qtd === 1 ? 'lançamento' : 'lançamentos')
+            . ' e não pode ser apagada sem perder esse histórico. Você pode escondê-la: '
+            . 'ela some da hora de lançar, mas os lançamentos antigos continuam.',
+            409
+        );
+    }
+    consulta('DELETE FROM categorias WHERE id = ?', [$id]);
     return ['ok' => true];
 }
 
