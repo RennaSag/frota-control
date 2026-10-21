@@ -173,7 +173,7 @@ function aoEnviar(form, acao) {
 function telaLogin(mensagem) {
   document.body.classList.add('tela-entrada');
   app.innerHTML = `
-    <div class="entrada">
+    <div class="tela-login">
       <form class="cartao" novalidate>
         <div class="logo">${LOGO}</div>
         <h1>${esc(window.NOME_SISTEMA || 'Controle da Frota')}</h1>
@@ -1758,7 +1758,7 @@ function formCategoria(c, tipoNovo, aoConcluir) {
   } catch (erro) {
     if (/PHP|inesperada|conectar|MySQL/i.test(erro.message)) {
       document.body.classList.add('tela-entrada');
-      app.innerHTML = `<div class="entrada"><div class="cartao">
+      app.innerHTML = `<div class="tela-login"><div class="cartao">
         <div class="logo">${LOGO}</div>
         <h1>Quase lá</h1>
         <div class="aviso erro">${esc(erro.message)}</div>

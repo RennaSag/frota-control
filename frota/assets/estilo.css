@@ -1,6 +1,6 @@
 :root {
   color-scheme: light;
-  --fundo: #f4f5f7;
+  --fundo: #f7f8fa;
   --superficie: #ffffff;
   --superficie-2: #f8f9fb;
   --borda: #e1e4e9;
@@ -11,9 +11,9 @@
   --acento: #1d3a5f;
   --acento-fraco: #eaeef4;
   --acento-tinta: #1d3a5f;
-  --topo: #16263b;
-  --topo-tinta: #ffffff;
-  --topo-tinta-2: #a9b6c7;
+  --topo: #ffffff;
+  --topo-tinta: #141a22;
+  --topo-tinta-2: #6f7987;
   --ok: #1d6b47;
   --ok-fraco: #e8f3ed;
   --alerta: #8a5300;
@@ -26,36 +26,6 @@
   --sombra: 0 1px 2px rgba(20, 26, 34, .04);
   --raio: 8px;
   --raio-s: 6px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-tema="claro"]) {
-    color-scheme: dark;
-    --fundo: #111418;
-    --superficie: #181c22;
-    --superficie-2: #1e232a;
-    --borda: #2a3039;
-    --borda-forte: #3a424d;
-    --tinta: #eef1f5;
-    --tinta-2: #b3bcc8;
-    --tinta-3: #8a94a1;
-    --acento: #7fa3cf;
-    --acento-fraco: #1d2633;
-    --acento-tinta: #a9c3e3;
-    --topo: #0c0f13;
-    --topo-tinta: #eef1f5;
-    --topo-tinta-2: #8a94a1;
-    --ok: #5cb88a;
-    --ok-fraco: #15241c;
-    --alerta: #d9a35f;
-    --alerta-fraco: #2a2217;
-    --erro: #e48a83;
-    --erro-fraco: #2b1a19;
-    --serie-entrada: #5f8cc0;
-    --serie-saida: #c98552;
-    --barra: #5f8cc0;
-    --sombra: none;
-  }
 }
 
 * { box-sizing: border-box; }
@@ -85,6 +55,7 @@ a { color: var(--acento-tinta); }
   z-index: 20;
   background: var(--topo);
   color: var(--topo-tinta);
+  border-bottom: 1px solid var(--borda);
   padding: 10px 16px;
   min-height: 58px;
   display: flex;
@@ -108,8 +79,8 @@ a { color: var(--acento-tinta); }
 .logo {
   width: 36px; height: 36px;
   border-radius: 6px;
-  border: 1.5px solid currentColor;
-  color: var(--topo-tinta);
+  border: 1.5px solid var(--acento);
+  color: var(--acento);
   display: grid; place-items: center;
   flex: none;
 }
@@ -297,9 +268,6 @@ a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
 .btn:hover { background: var(--superficie-2); border-color: var(--tinta-3); }
 .btn.principal { background: var(--acento); border-color: var(--acento); color: #fff; }
 .btn.principal:hover { filter: brightness(1.12); }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-tema="claro"]) .btn.principal { color: #0f1620; }
-}
 .btn.grande { width: 100%; min-height: 54px; font-size: 1.02rem; }
 .btn.perigo { color: var(--erro); border-color: var(--erro); background: transparent; }
 .btn.perigo:hover { background: var(--erro-fraco); }
@@ -545,8 +513,8 @@ table.simples td:last-child { font-weight: 500; }
   bottom: 96px;
   transform: translateX(-50%);
   z-index: 80;
-  background: var(--topo);
-  color: var(--topo-tinta);
+  background: var(--tinta);
+  color: #ffffff;
   padding: 12px 20px;
   border-radius: var(--raio-s);
   font-weight: 500;
@@ -574,18 +542,18 @@ table.simples td:last-child { font-weight: 500; }
 .etiqueta.aberta { background: var(--ok-fraco); color: var(--ok); border-color: var(--ok); }
 .etiqueta.inativo { background: var(--alerta-fraco); color: var(--alerta); border-color: var(--alerta); }
 
-.entrada { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; }
-.entrada .cartao { width: 100%; max-width: 400px; padding: 28px 24px; }
-.entrada .logo {
+.tela-login { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; }
+.tela-login .cartao { width: 100%; max-width: 400px; padding: 28px 24px; }
+.tela-login .logo {
   width: 48px; height: 48px;
   border: 0;
-  background: var(--topo);
-  color: var(--topo-tinta);
+  background: var(--acento);
+  color: #ffffff;
   margin-bottom: 18px;
 }
-.entrada .logo svg { width: 28px; height: 28px; }
-.entrada h1 { font-size: 1.35rem; margin-bottom: 4px; }
-.entrada p.ajuda { color: var(--tinta-3); margin: 0 0 22px; font-size: .92rem; }
+.tela-login .logo svg { width: 28px; height: 28px; }
+.tela-login h1 { font-size: 1.35rem; margin-bottom: 4px; }
+.tela-login p.ajuda { color: var(--tinta-3); margin: 0 0 22px; font-size: .92rem; }
 
 .carregando { text-align: center; color: var(--tinta-3); padding: 40px 0; }
 .oculto { display: none !important; }

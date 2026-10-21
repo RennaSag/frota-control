@@ -1,7 +1,7 @@
 <?php
 require __DIR__ . '/config.php';
 $nome = htmlspecialchars(NOME_SISTEMA, ENT_QUOTES, 'UTF-8');
-$v = '1.2.0';
+$v = '1.3.0';
 ?>
 <!doctype html>
 <html lang="pt-BR">
@@ -10,7 +10,7 @@ $v = '1.2.0';
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title><?= $nome ?></title>
   <meta name="description" content="Controle de entradas e gastos de uma frota de caminhões.">
-  <meta name="theme-color" content="#16263b">
+  <meta name="theme-color" content="#ffffff">
   <link rel="manifest" href="manifest.php">
   <link rel="icon" href="assets/icone.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="assets/icone.svg">
