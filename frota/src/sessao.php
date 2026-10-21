@@ -1,5 +1,4 @@
 <?php
-/** Login, sessão e níveis de acesso. */
 
 function iniciaSessao(): void
 {
@@ -26,7 +25,6 @@ function iniciaSessao(): void
     session_start();
 }
 
-/** Guarda as sessões numa tabela, para o login sobreviver ao reinício do servidor. */
 class SessoesNoBanco implements SessionHandlerInterface, SessionUpdateTimestampHandlerInterface
 {
     private int $duracao;
@@ -84,7 +82,6 @@ class SessoesNoBanco implements SessionHandlerInterface, SessionUpdateTimestampH
     }
 }
 
-/** Usuário logado (ou null). Confere no banco para pegar bloqueio na hora. */
 function usuarioAtual(): ?array
 {
     iniciaSessao();
@@ -151,10 +148,6 @@ function encerraSessao(): void
     session_destroy();
 }
 
-/**
- * Impede que um site de terceiros faça um pedido em nome do usuário logado:
- * o navegador só deixa enviar este cabeçalho a partir da própria página.
- */
 function exigePedidoDoApp(): void
 {
     $metodo = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -166,7 +159,6 @@ function exigePedidoDoApp(): void
     }
 }
 
-// ------------------------------------------------ freio de tentativas de senha
 function podeTentarLogin(string $chave): bool
 {
     $limite = 10;

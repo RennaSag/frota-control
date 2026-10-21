@@ -1,5 +1,3 @@
-/* Controle da Frota — telas do sistema (PC e celular). */
-
 const app = document.getElementById('app');
 
 const estado = {
@@ -14,7 +12,6 @@ const estado = {
   meses: 12,
 };
 
-/* ============================ utilidades ============================ */
 function hoje() {
   const d = new Date();
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -81,7 +78,6 @@ const LOGO = `<svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-
   stroke-linejoin="round" aria-hidden="true"><path d="M3 21h15V9H3zm15 0h4m4 0h3v-6l-3-4h-8"/>
   <circle cx="9" cy="22.5" r="2.5"/><circle cx="24" cy="22.5" r="2.5"/></svg>`;
 
-/* ============================ comunicação ============================ */
 function endereco(rota, params = {}) {
   const p = new URLSearchParams({ r: rota });
   for (const [chave, valor] of Object.entries(params)) {
@@ -174,7 +170,6 @@ function aoEnviar(form, acao) {
   });
 }
 
-/* ============================ login ============================ */
 function telaLogin(mensagem) {
   document.body.classList.add('tela-entrada');
   app.innerHTML = `
@@ -203,7 +198,6 @@ function telaLogin(mensagem) {
   });
 }
 
-/* ============================ estrutura ============================ */
 const ABAS_MOTORISTA = [
   { id: 'novo', ico: 'registrar', nome: 'Registrar' },
   { id: 'meus', ico: 'lista', nome: 'Meus gastos' },
@@ -299,7 +293,6 @@ async function recarregaBasico() {
   estado.viagensAbertas = viagens;
 }
 
-/* ====================== formulário de lançamento ====================== */
 const PAGAMENTOS = ['Dinheiro', 'Cartão da empresa', 'Pix', 'Cartão frete', 'Boleto', 'Do próprio bolso'];
 
 function comOExtra(lista, extra) {
@@ -340,7 +333,6 @@ function categoriasDoTipo(tipo) {
   return estado.categorias.filter((c) => c.tipo === tipo);
 }
 
-/** Campos do formulário. tipo = 'saida' (gasto) ou 'entrada' (frete/receita). */
 function camposLancamento(tipo, l = {}) {
   const entrada = tipo === 'entrada';
   const valorInicial = l.valor_centavos
@@ -470,7 +462,6 @@ function camposLancamento(tipo, l = {}) {
     </div>`;
 }
 
-/** Reduz fotos grandes antes de enviar: para ler uma nota bastam 1600 px. */
 async function reduzFoto(arquivo) {
   if (!/^image\/(jpeg|png|webp)$/.test(arquivo.type) || arquivo.size < 400 * 1024) return arquivo;
   try {
@@ -602,7 +593,6 @@ function abreFormLancamento(tipo, lancamento, aoConcluir) {
   });
 }
 
-/* ====================== tela: registrar gasto (motorista) ====================== */
 async function telaNovoGasto(alvo) {
   const ultimoCaminhao = localStorage.getItem('ultimo_caminhao') || '';
   alvo.innerHTML = `
@@ -655,7 +645,6 @@ async function mostraResumoHoje() {
   ligaItens(caixa);
 }
 
-/* ====================== tela: lançamentos ====================== */
 function itemLancamento(l) {
   const entrada = l.tipo === 'entrada';
   const detalhes = [
@@ -879,7 +868,6 @@ async function abreLancamento(id) {
   };
 }
 
-/* ====================== tela: viagens ====================== */
 async function telaViagens(alvo) {
   alvo.innerHTML = `
     <div class="pilha">
@@ -1123,7 +1111,6 @@ async function abreViagem(v, aoConcluir) {
   });
 }
 
-/* ====================== gráficos ====================== */
 function barras(itens, rotulo = (i) => esc(i.nome)) {
   if (!itens.length) return '<p class="ajuda">Sem lançamentos neste período.</p>';
   const maior = Math.max(...itens.map((i) => Number(i.total_centavos)));
@@ -1203,7 +1190,6 @@ function graficoMeses(meses) {
     </div>`;
 }
 
-/* ====================== tela: panorama (proprietário) ====================== */
 async function telaPanorama(alvo) {
   alvo.innerHTML = `
     <div class="pilha">
@@ -1333,7 +1319,6 @@ async function telaPanorama(alvo) {
   await atualiza();
 }
 
-/* ====================== tela: relatórios (proprietário) ====================== */
 async function telaRelatorios(alvo) {
   alvo.innerHTML = `
     <div class="pilha">
@@ -1492,7 +1477,6 @@ async function telaRelatorios(alvo) {
   await atualiza();
 }
 
-/* ====================== tela: ajustes / perfil ====================== */
 async function telaAjustes(alvo) {
   const admin = ehAdmin();
   alvo.innerHTML = `
@@ -1767,7 +1751,6 @@ function formCategoria(c, tipoNovo, aoConcluir) {
   });
 }
 
-/* ====================== início ====================== */
 (async function inicia() {
   try {
     estado.usuario = await api('GET', 'eu');

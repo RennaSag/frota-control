@@ -1,4 +1,3 @@
-# Protege arquivos internos do sistema.
 <FilesMatch "\.(sqlite|db|md|log)$">
   <IfModule mod_authz_core.c>
     Require all denied

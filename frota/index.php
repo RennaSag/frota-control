@@ -1,7 +1,7 @@
 <?php
 require __DIR__ . '/config.php';
 $nome = htmlspecialchars(NOME_SISTEMA, ENT_QUOTES, 'UTF-8');
-$v = '1.2.0'; // muda junto com os arquivos de assets para forçar atualização no celular
+$v = '1.2.0';
 ?>
 <!doctype html>
 <html lang="pt-BR">

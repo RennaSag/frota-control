@@ -1,4 +1,3 @@
-# Nada nesta pasta pode ser aberto direto pelo navegador nem executado.
 php_flag engine off
 <IfModule mod_authz_core.c>
   Require all denied

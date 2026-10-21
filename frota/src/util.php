@@ -1,7 +1,5 @@
 <?php
-/** Validação dos campos e respostas em JSON. */
 
-/** Erro que vira mensagem na tela do usuário (não é falha do sistema). */
 class ErroDeUso extends Exception
 {
     public function __construct(string $mensagem, int $status = 400)
@@ -47,7 +45,6 @@ function campoTexto($valor, string $campo, bool $obrigatorio = false, int $max =
     return $v;
 }
 
-/** Aceita "1.234,56", "1234.56", "1234,56" ou número e devolve centavos. */
 function campoCentavos($valor, string $campo = 'Valor'): int
 {
     if ($valor === null || $valor === '') {
@@ -134,14 +131,12 @@ function campoSimNao($valor, bool $padrao = true): int
     return 1;
 }
 
-/** Mês no formato AAAA-MM; volta para o mês atual se vier bagunçado. */
 function mesValido($valor): string
 {
     $v = trim((string) $valor);
     return preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $v) ? $v : date('Y-m');
 }
 
-/** Primeiro e último dia do mês. */
 function limitesDoMes(string $mes): array
 {
     return [$mes . '-01', date('Y-m-t', strtotime($mes . '-01'))];

@@ -1,5 +1,4 @@
 <?php
-/** Todas as rotas da API (api.php?r=...). */
 
 const SQL_LANCAMENTO = '
     SELECT l.*, c.nome AS categoria, c.icone, c.tipo AS categoria_tipo,
@@ -29,7 +28,6 @@ function despacha(string $r, string $metodo)
 {
     $q = $_GET;
     switch ("$metodo $r") {
-        // ------------------------------------------------------------ sessão
         case 'POST login':
             return rotaLogin();
         case 'POST logout':
@@ -40,7 +38,6 @@ function despacha(string $r, string $metodo)
         case 'POST trocar-senha':
             return rotaTrocarSenha();
 
-        // ---------------------------------------------------------- usuários
         case 'GET usuarios':
             return rotaUsuarios();
         case 'POST usuarios':
@@ -48,7 +45,6 @@ function despacha(string $r, string $metodo)
         case 'PUT usuario':
             return rotaEditaUsuario(campoId($q['id'] ?? null, 'Usuário', true));
 
-        // --------------------------------------------------------- caminhões
         case 'GET caminhoes':
             exigeLogin();
             $todos = ehAdmin() && ($q['todos'] ?? '') === '1';
@@ -61,7 +57,6 @@ function despacha(string $r, string $metodo)
         case 'PUT caminhao':
             return rotaEditaCaminhao(campoId($q['id'] ?? null, 'Caminhão', true));
 
-        // -------------------------------------------------------- categorias
         case 'GET categorias':
             return rotaCategorias();
         case 'POST categorias':
@@ -69,7 +64,6 @@ function despacha(string $r, string $metodo)
         case 'PUT categoria':
             return rotaEditaCategoria(campoId($q['id'] ?? null, 'Categoria', true));
 
-        // ----------------------------------------------------------- viagens
         case 'GET viagens':
             return rotaViagens();
         case 'POST viagens':
@@ -87,7 +81,6 @@ function despacha(string $r, string $metodo)
             }
             return ['ok' => true];
 
-        // ------------------------------------------------------- lançamentos
         case 'GET lancamentos':
             return rotaLancamentos();
         case 'GET lancamento':
@@ -99,7 +92,6 @@ function despacha(string $r, string $metodo)
         case 'DELETE lancamento':
             return rotaExcluiLancamento(campoId($q['id'] ?? null, 'Lançamento', true));
 
-        // --------------------------------------------------------- relatórios
         case 'GET resumo':
             return rotaResumo();
         case 'GET historico':
@@ -109,7 +101,6 @@ function despacha(string $r, string $metodo)
         case 'GET csv':
             return rotaCsv();
 
-        // ------------------------------------------------------ comprovantes
         case 'POST comprovante':
             return rotaEnviaComprovante();
         case 'GET comprovante':
@@ -118,7 +109,6 @@ function despacha(string $r, string $metodo)
     throw new ErroDeUso('Endereço não encontrado.', 404);
 }
 
-// =========================================================== sessão / perfil
 function rotaLogin(): array
 {
     $corpo = corpoJson();
@@ -160,7 +150,6 @@ function rotaTrocarSenha(): array
     return ['ok' => true];
 }
 
-// =================================================================== usuários
 function rotaUsuarios(): array
 {
     $eu = exigeLogin();
@@ -242,7 +231,6 @@ function rotaEditaUsuario(int $id): array
     return ['ok' => true];
 }
 
-// ================================================================== caminhões
 function rotaNovoCaminhao(): array
 {
     exigeAdmin();
@@ -278,7 +266,6 @@ function rotaEditaCaminhao(int $id): array
     return ['ok' => true];
 }
 
-// ================================================================= categorias
 function rotaCategorias(): array
 {
     $eu = exigeLogin();
@@ -342,7 +329,6 @@ function rotaEditaCategoria(int $id): array
     return ['ok' => true];
 }
 
-// ==================================================================== viagens
 function viagemAcessivel(int $id): array
 {
     $eu = exigeLogin();
@@ -450,7 +436,6 @@ function rotaEncerraViagem(int $id): array
     return ['ok' => true];
 }
 
-// ================================================================ lançamentos
 function filtrosLancamento(): array
 {
     $eu = exigeLogin();
@@ -492,7 +477,7 @@ function filtrosLancamento(): array
     }
     $busca = campoTexto($_GET['busca'] ?? null, 'Busca', false, 60);
     if ($busca !== null) {
-        $like = BANCO === 'pgsql' ? 'ILIKE' : 'LIKE'; // no PostgreSQL o LIKE diferencia maiúsculas
+        $like = BANCO === 'pgsql' ? 'ILIKE' : 'LIKE';
         $cond[] = "(l.descricao $like ? OR l.observacao $like ? OR l.lugar $like ? OR l.cliente $like ?)";
         for ($i = 0; $i < 4; $i++) {
             $args[] = '%' . $busca . '%';
@@ -627,7 +612,6 @@ function rotaExcluiLancamento(int $id): array
     return ['ok' => true];
 }
 
-// ================================================================ relatórios
 function rotaResumo(): array
 {
     exigeAdmin();
@@ -827,7 +811,6 @@ function rotaCsv(): void
     header('Content-Disposition: attachment; filename="' . $nome . '"');
     header('Cache-Control: no-store');
 
-    // Montado à mão (e sempre entre aspas) para o Excel abrir igual em qualquer versão do PHP.
     $linha = function (array $campos): string {
         $saida = [];
         foreach ($campos as $c) {
@@ -836,7 +819,7 @@ function rotaCsv(): void
         return implode(';', $saida) . "\r\n";
     };
 
-    echo "\xEF\xBB\xBF"; // acentos certos no Excel
+    echo "\xEF\xBB\xBF";
     echo $linha(['Data', 'Tipo', 'Categoria', 'Descrição', 'Valor (R$)', 'Caminhão', 'Motorista',
         'Viagem', 'Litros', 'Km', 'Onde foi', 'Quem pagou', 'Pagamento', 'Observação']);
     foreach ($itens as $l) {
@@ -860,7 +843,6 @@ function rotaCsv(): void
     exit;
 }
 
-// ============================================================== comprovantes
 function pastaUploads(): string
 {
     $pasta = __DIR__ . '/../uploads';
@@ -870,14 +852,13 @@ function pastaUploads(): string
     return $pasta;
 }
 
-// No PostgreSQL as fotos ficam na tabela "comprovantes"; nos outros, na pasta uploads.
 function guardaComprovante(string $nome, string $temporario): void
 {
     if (BANCO === 'pgsql') {
         $arquivo = fopen($temporario, 'rb');
         $st = banco()->prepare('INSERT INTO comprovantes (nome, dados, criado_em) VALUES (?, ?, ?)');
         $st->bindValue(1, $nome);
-        $st->bindValue(2, $arquivo, PDO::PARAM_LOB); // bindParam trocaria $arquivo pelo conteúdo
+        $st->bindValue(2, $arquivo, PDO::PARAM_LOB);
         $st->bindValue(3, agora());
         $st->execute();
         fclose($arquivo);

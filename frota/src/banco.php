@@ -1,9 +1,4 @@
 <?php
-/**
- * Conexão com o banco e criação automática das tabelas.
- * Funciona no MySQL do XAMPP e também em SQLite (arquivo), sem mudar o resto do
- * sistema: todas as consultas usam SQL comum aos dois.
- */
 
 function banco(): PDO
 {
@@ -33,7 +28,6 @@ function banco(): PDO
         } else {
             $base = 'mysql:host=' . MYSQL_HOST . ';port=' . MYSQL_PORTA . ';charset=utf8mb4';
             try {
-                // Cria o banco no primeiro acesso (no XAMPP o "root" tem permissão para isso).
                 $servidor = new PDO($base, MYSQL_USUARIO, MYSQL_SENHA, $opcoes);
                 $servidor->exec(
                     'CREATE DATABASE IF NOT EXISTS `' . MYSQL_BANCO . '`'
@@ -41,7 +35,6 @@ function banco(): PDO
                 );
                 $servidor = null;
             } catch (PDOException $e) {
-                // Sem permissão para criar: segue em frente, o banco pode já existir.
             }
             $pdo = new PDO($base . ';dbname=' . MYSQL_BANCO, MYSQL_USUARIO, MYSQL_SENHA, $opcoes);
         }
@@ -53,7 +46,6 @@ function banco(): PDO
     return $pdo;
 }
 
-/** Converte postgresql://usuario:senha@servidor:porta/banco?sslmode=require para o PDO. */
 function dsnPostgres(string $url): array
 {
     $p = parse_url($url);
@@ -83,7 +75,6 @@ function mensagemDeConexao(PDOException $e): string
         . 'config.php. (' . $e->getMessage() . ')';
 }
 
-/** Trecho de SQL que agrupa por mês (AAAA-MM) — muda de banco para banco. */
 function sqlMes(string $coluna): string
 {
     if (BANCO === 'sqlite') {
@@ -94,7 +85,6 @@ function sqlMes(string $coluna): string
         : "DATE_FORMAT($coluna, '%Y-%m')";
 }
 
-// ---------------------------------------------------------------- consultas
 function consulta(string $sql, array $args = []): PDOStatement
 {
     $st = banco()->prepare($sql);
@@ -144,11 +134,8 @@ function atualiza(string $tabela, int $id, array $dados): int
     return consulta($sql, $args)->rowCount();
 }
 
-// ---------------------------------------------------------------- estrutura
 function criaEstrutura(PDO $pdo): void
 {
-    // No PostgreSQL o banco costuma ficar em outro servidor: em vez de repetir os
-    // CREATE a cada pedido, confere uma vez se a última tabela já existe.
     if (BANCO === 'pgsql' && $pdo->query("SELECT to_regclass('comprovantes')")->fetchColumn()) {
         return;
     }
@@ -160,16 +147,13 @@ function criaEstrutura(PDO $pdo): void
         try {
             $pdo->exec($comando);
         } catch (PDOException $e) {
-            // o índice já existe (MySQL antigo não aceita "IF NOT EXISTS" aqui)
         }
     }
     semeia($pdo);
 }
 
-/** Comandos de criação das tabelas, separados por banco (função pura, fácil de revisar). */
 function estruturaSql(string $banco): array
 {
-    // Tipos que mudam entre os bancos
     $tipos = [
         'mysql' => [
             'id' => 'INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY', 'ref' => 'INT UNSIGNED',
@@ -271,8 +255,6 @@ function estruturaSql(string $banco): array
         desde $dataHora    NOT NULL";
 
     if ($banco === 'pgsql') {
-        // Em hospedagens como o Render o disco é apagado a cada reinício, então
-        // as sessões e as fotos das notas também ficam no banco.
         $tabelas['sessoes'] = '
             id     VARCHAR(128) NOT NULL PRIMARY KEY,
             dados  TEXT         NOT NULL,
@@ -302,7 +284,6 @@ function estruturaSql(string $banco): array
 function semeia(PDO $pdo): void
 {
     $categorias = [
-        // nome,                     tipo,      ícone,      litros, descrição, ordem
         ['Abastecimento',            'saida',   'fuel',     1, 0, 10],
         ['Salário do motorista',     'saida',   'salario',  0, 0, 20],
         ['Manutenção',               'saida',   'wrench',   0, 0, 30],

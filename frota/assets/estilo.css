@@ -1,4 +1,3 @@
-/* ============ Cores e medidas ============ */
 :root {
   color-scheme: light;
   --fundo: #f4f5f7;
@@ -80,7 +79,6 @@ h1, h2, h3 { margin: 0; line-height: 1.25; font-weight: 600; }
 button, input, select, textarea { font: inherit; color: inherit; }
 a { color: var(--acento-tinta); }
 
-/* ============ Topo ============ */
 .topo {
   position: sticky;
   top: 0;
@@ -120,7 +118,6 @@ a { color: var(--acento-tinta); }
 main { max-width: 1040px; margin: 0 auto; padding: 20px 16px; }
 .pilha { display: grid; gap: 16px; }
 
-/* ============ Navegação ============ */
 .ico-linha {
   width: 20px; height: 20px;
   fill: none;
@@ -184,7 +181,6 @@ main { max-width: 1040px; margin: 0 auto; padding: 20px 16px; }
   .nav .ico-linha { width: 18px; height: 18px; }
 }
 
-/* ============ Cartões ============ */
 .cartao {
   background: var(--superficie);
   border: 1px solid var(--borda);
@@ -210,7 +206,6 @@ main { max-width: 1040px; margin: 0 auto; padding: 20px 16px; }
 .titulo-secao h1 { font-size: 1.4rem; letter-spacing: -.01em; }
 .titulo-secao p { margin: 0; color: var(--tinta-3); font-size: .9rem; }
 
-/* ============ Formulários ============ */
 .campo { display: grid; gap: 6px; margin-bottom: 16px; }
 .campo > label { font-weight: 600; font-size: .9rem; color: var(--tinta); }
 .campo > .dica { color: var(--tinta-3); font-size: .82rem; margin: -2px 0 2px; }
@@ -283,7 +278,6 @@ a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
 }
 .valor-caixa input:focus-visible { outline: 0; }
 
-/* Botões */
 .btn {
   border: 1px solid var(--borda-forte);
   background: var(--superficie);
@@ -315,7 +309,6 @@ a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
 .acoes.fim { justify-content: flex-end; }
 .acoes.duas { display: grid; grid-template-columns: 1fr 1fr; }
 
-/* Categorias em blocos */
 .categorias { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .categorias button {
   border: 1px solid var(--borda-forte);
@@ -338,7 +331,6 @@ a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
   box-shadow: inset 0 0 0 1px var(--acento);
 }
 
-/* ============ Listas ============ */
 .lista { display: grid; }
 .lista > .item + .item { border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
 .lista > .item:not(:last-child) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
@@ -372,7 +364,6 @@ a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
   font-size: .95rem;
 }
 
-/* ============ Números em destaque ============ */
 .destaque {
   background: var(--superficie);
   border: 1px solid var(--borda);
@@ -418,14 +409,12 @@ a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
 .mini .numero.saida { color: var(--erro); }
 .mini small { color: var(--tinta-3); font-size: .78rem; }
 
-/* ============ Gráficos ============ */
 .legenda { display: flex; gap: 18px; flex-wrap: wrap; font-size: .85rem; color: var(--tinta-2); margin-bottom: 12px; }
 .legenda span { display: flex; align-items: center; gap: 6px; }
 .legenda i { width: 10px; height: 10px; border-radius: 2px; display: block; }
 .marca-entrada { background: var(--serie-entrada); }
 .marca-saida { background: var(--serie-saida); }
 
-/* barras horizontais: uma série, identidade pelo rótulo */
 .barras { display: grid; gap: 14px; }
 .barras .linha-barra { display: grid; gap: 5px; }
 .barras .rotulo-barra { display: flex; justify-content: space-between; gap: 10px; font-size: .9rem; }
@@ -435,14 +424,12 @@ a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
 .barras .preenche { height: 100%; background: var(--barra); min-width: 3px; }
 .barras .qtd { color: var(--tinta-3); font-size: .78rem; }
 
-/* colunas por dia do mês */
 .colunas { display: flex; align-items: flex-end; gap: 2px; height: 130px; padding-top: 8px; border-bottom: 1px solid var(--borda-forte); }
 .colunas .col { flex: 1; display: flex; align-items: flex-end; height: 100%; }
 .colunas .col i { display: block; width: 100%; background: var(--serie-saida); border-radius: 2px 2px 0 0; min-height: 2px; }
 .colunas .col.zero i { background: var(--borda); }
 .eixo { display: flex; justify-content: space-between; color: var(--tinta-3); font-size: .76rem; margin-top: 6px; }
 
-/* histórico mês a mês: duas séries lado a lado */
 .tabela-rolagem { overflow-x: auto; }
 .grafico-meses { display: flex; gap: 14px; align-items: flex-end; min-width: min-content; padding-top: 6px; }
 .grafico-meses .mes-grupo { display: grid; gap: 6px; justify-items: center; min-width: 54px; }
@@ -461,7 +448,6 @@ a:focus-visible { outline: 2px solid var(--acento); outline-offset: 2px; }
 .grafico-meses .saldo-mes.positivo { color: var(--ok); }
 .grafico-meses .saldo-mes.negativo { color: var(--erro); }
 
-/* tabelas de relatório */
 table.dados { width: 100%; border-collapse: collapse; font-size: .9rem; }
 table.dados th, table.dados td { padding: 10px 12px; text-align: right; white-space: nowrap; }
 table.dados th:first-child, table.dados td:first-child { text-align: left; }
@@ -485,13 +471,11 @@ table.simples td { padding: 9px 0; vertical-align: top; }
 table.simples td:first-child { color: var(--tinta-3); white-space: nowrap; padding-right: 16px; font-size: .9rem; }
 table.simples td:last-child { font-weight: 500; }
 
-/* ============ Filtros ============ */
 .filtros { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); align-items: end; }
 .filtros .campo { margin: 0; }
 .filtros .campo > label { font-size: .8rem; color: var(--tinta-2); }
 .filtros select, .filtros input { min-height: 44px; padding: 9px 12px; font-size: .95rem; }
 
-/* escolha entrada/saída */
 .escolha { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .escolha button {
   border: 1px solid var(--borda-forte);
@@ -504,7 +488,6 @@ table.simples td:last-child { font-weight: 500; }
 }
 .escolha button[aria-pressed="true"] { border-color: var(--acento); background: var(--acento-fraco); color: var(--acento-tinta); box-shadow: inset 0 0 0 1px var(--acento); }
 
-/* ============ Janela ============ */
 .janela {
   position: fixed;
   inset: 0;
@@ -544,7 +527,6 @@ table.simples td:last-child { font-weight: 500; }
 }
 .janela .fechar .ico-linha { width: 18px; height: 18px; }
 
-/* ============ Avisos ============ */
 .aviso {
   border-radius: var(--raio-s);
   padding: 11px 14px;
@@ -592,7 +574,6 @@ table.simples td:last-child { font-weight: 500; }
 .etiqueta.aberta { background: var(--ok-fraco); color: var(--ok); border-color: var(--ok); }
 .etiqueta.inativo { background: var(--alerta-fraco); color: var(--alerta); border-color: var(--alerta); }
 
-/* ============ Login ============ */
 .entrada { min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; }
 .entrada .cartao { width: 100%; max-width: 400px; padding: 28px 24px; }
 .entrada .logo {
