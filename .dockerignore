@@ -1,5 +1,0 @@
-.git
-frota/dados/*.sqlite*
-frota/uploads/*
-!frota/uploads/.htaccess
-frota/config.local.php
