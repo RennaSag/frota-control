@@ -1,0 +1,5 @@
+frota/dados/*
+frota/uploads/*
+!frota/uploads/.htaccess
+!frota/dados/.htaccess
+frota/config.local.php
