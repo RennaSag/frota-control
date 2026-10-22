@@ -1,0 +1,3208 @@
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+});
+
+const app = document.getElementById('app');
+
+const estado = {
+  usuario: null,
+  aba: null,
+  categorias: [],
+  caminhoes: [],
+  usuarios: [],
+  viagensAbertas: [],
+  mes: hoje().slice(0, 7),
+  filtros: {
+    de: `${hoje().slice(0, 7)}-01`,
+    ate: hoje(),
+  },
+  versaoAba: 0,
+  modoGrafico: 'linha', // 'linha' | 'barras' | 'pizza'
+};
+
+function hoje() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+const BRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
+const NUM = new Intl.NumberFormat('pt-BR', { maximumFractionDigits: 2 });
+const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho',
+  'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+const MESES_CURTOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun',
+  'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+const dinheiro = (centavos) => BRL.format((Number(centavos) || 0) / 100);
+const numero = (n) => NUM.format(Number(n) || 0);
+
+function dinheiroCurto(centavos) {
+  const v = (Number(centavos) || 0) / 100;
+  const sinal = v < 0 ? '−' : '';
+  const a = Math.abs(v);
+  if (a >= 1000000) return `${sinal}${NUM.format(Math.round(a / 100000) / 10)} mi`;
+  if (a >= 1000) return `${sinal}${NUM.format(Math.round(a / 100) / 10)} mil`;
+  return `${sinal}${NUM.format(Math.round(a))}`;
+}
+
+function dataCurta(iso) {
+  if (!iso) return '';
+  const [a, m, d] = String(iso).slice(0, 10).split('-');
+  return `${d}/${m}/${a}`;
+}
+function dataDiaMes(iso) {
+  if (!iso) return '';
+  const [, m, d] = String(iso).slice(0, 10).split('-');
+  return `${d}/${m}`;
+}
+function mesLongo(mes) {
+  const [a, m] = mes.split('-');
+  return `${MESES[Number(m) - 1]} de ${a}`;
+}
+function mesCurto(mes) {
+  const [a, m] = mes.split('-');
+  return `${MESES_CURTOS[Number(m) - 1]}/${a.slice(2)}`;
+}
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+const ICONES_SVG = {
+  registrar: '<path d="M12 5v14M5 12h14"/>',
+  lista: '<path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/>',
+  rota: '<circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16"/>',
+  usuario: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  panorama: '<path d="M3 3v18h18"/><path d="M8 17v-5M13 17V8M18 17v-8"/>',
+  ajustes: '<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>',
+  fechar: '<path d="M6 6l12 12M18 6 6 18"/>',
+  sino: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  busca: '<circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  caminhao: '<rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
+  combustivel: '<path d="M3 22h12M4 9h10M4 4h10a2 2 0 0 1 2 2v16H4V6a2 2 0 0 1 2-2zM16 8h2a2 2 0 0 1 2 2v8a2 2 0 0 0 2 2 2 2 0 0 0 2-2V9l-3-3"/>',
+  receber: '<circle cx="12" cy="12" r="9"/><path d="M12 16V8M8 12l4-4 4 4"/>',
+  gasto: '<circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12l4 4 4-4"/>',
+  saldo: '<circle cx="12" cy="12" r="9"/><path d="M12 6v12M15 9.5a2.5 2.5 0 0 0-2.5-2.5H10a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4h-3a2.5 2.5 0 0 1-2.5-2.5"/>',
+  setaDireita: '<path d="M9 18l6-6-6-6"/>',
+  adicionar: '<path d="M12 5v14M5 12h14"/>',
+  pdf: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+  linhaGrafico: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  pizzaGrafico: '<path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/>',
+  barrasGrafico: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+  lixeira: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+  editar: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+  olho: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  olhoOculto: '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
+  mais: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  cadeado: '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  tag: '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
+  gota: '<path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/>',
+  check: '<polyline points="20 6 9 17 4 12"/>',
+  aviso: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+  escudo: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  filtro: '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+  sair: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  telefone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  celular: '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+  relogio: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
+};
+
+function icone(nome, extraClasse = '') {
+  const caminho = ICONES_SVG[nome] || ICONES_SVG.lista;
+  return `<svg class="ico-linha ${extraClasse}" viewBox="0 0 24 24" aria-hidden="true">${caminho}</svg>`;
+}
+
+const svg = (nome) => icone(nome);
+
+// Safe Proxy so that accessing TRACOS[chave] or TRACOS.anything ALWAYS returns valid SVG and never undefined
+const TRACOS = new Proxy(ICONES_SVG, {
+  get(target, prop) {
+    if (typeof prop === 'string') {
+      return icone(prop);
+    }
+    return '';
+  }
+});
+
+function iniciais(nome) {
+  if (!nome) return 'CF';
+  const p = String(nome).trim().split(/\s+/);
+  return (p.length > 1 ? p[0][0] + p[1][0] : p[0].slice(0, 2)).toUpperCase();
+}
+
+function exportarCSV(itens, nomeArquivo = 'lancamentos.csv') {
+  if (!itens || !itens.length) {
+    recado('Nenhum dado para exportar.');
+    return;
+  }
+  const cabecalhos = ['Data', 'Tipo', 'Categoria', 'Descricao', 'Valor (R$)', 'Caminhao', 'Motorista', 'Viagem', 'Litros', 'Km', 'Local', 'Cliente', 'Forma Pagamento', 'Observacao'];
+  const linhas = itens.map((l) => [
+    dataCurta(l.data),
+    l.tipo === 'entrada' ? 'Entrada (Frete)' : 'Saida (Gasto)',
+    `"${(l.categoria || '').replace(/"/g, '""')}"`,
+    `"${(l.descricao || '').replace(/"/g, '""')}"`,
+    ((Number(l.valor_centavos) || 0) / 100).toFixed(2).replace('.', ','),
+    `"${(l.placa || '').replace(/"/g, '""')}"`,
+    `"${(l.motorista || '').replace(/"/g, '""')}"`,
+    `"${l.viagem_origem ? `${l.viagem_origem} -> ${l.viagem_destino}` : ''}"`,
+    l.litros ? String(l.litros).replace('.', ',') : '',
+    l.km ? String(l.km) : '',
+    `"${(l.lugar || '').replace(/"/g, '""')}"`,
+    `"${(l.cliente || '').replace(/"/g, '""')}"`,
+    `"${(l.pagamento || '').replace(/"/g, '""')}"`,
+    `"${(l.observacao || '').replace(/"/g, '""')}"`,
+  ]);
+  const csvTexto = '\uFEFF' + [cabecalhos.join(';'), ...linhas.map((row) => row.join(';'))].join('\r\n');
+  const blob = new Blob([csvTexto], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nomeArquivo;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  recado('Planilha CSV gerada com sucesso.');
+}
+
+const LOGO = '<img src="assets/logo.png" alt="" width="192" height="192">';
+
+function endereco(rota, params = {}) {
+  const p = new URLSearchParams({ r: rota });
+  const token = localStorage.getItem('frota_token');
+  if (token) p.set('token', token);
+  for (const [chave, valor] of Object.entries(params)) {
+    if (valor !== undefined && valor !== null && valor !== '') p.set(chave, valor);
+  }
+  return `api.php?${p}`;
+}
+
+async function api(metodo, rota, params = {}, corpo = null) {
+  const token = localStorage.getItem('frota_token');
+  const resposta = await fetch(endereco(rota, params), {
+    method: metodo,
+    headers: {
+      'X-App-Frota': '1',
+      ...(token ? { 'Authorization': `Bearer ${token}`, 'X-Frota-Token': token } : {}),
+      ...(corpo ? { 'Content-Type': 'application/json' } : {}),
+    },
+    credentials: 'include',
+    body: corpo ? JSON.stringify(corpo) : undefined,
+  });
+  if (resposta.status === 401 && estado.usuario) {
+    localStorage.removeItem('frota_token');
+    estado.usuario = null;
+    telaLogin('Sua sessão expirou. Entre novamente.');
+    throw new Error('Sessão expirada.');
+  }
+  const texto = await resposta.text();
+  let dados = null;
+  try {
+    dados = texto ? JSON.parse(texto) : null;
+  } catch {
+    throw new Error('O servidor respondeu de forma inesperada.');
+  }
+  if (!resposta.ok) throw new Error(dados?.erro || 'Não foi possível concluir.');
+  return dados;
+}
+
+function recado(mensagem) {
+  document.querySelector('.recado')?.remove();
+  const div = document.createElement('div');
+  div.className = 'recado';
+  div.setAttribute('role', 'status');
+  div.textContent = mensagem;
+  document.body.appendChild(div);
+  setTimeout(() => div.remove(), 3200);
+}
+
+function janela(titulo, corpoHtml) {
+  document.querySelector('.janela')?.remove();
+  const fundo = document.createElement('div');
+  fundo.className = 'janela';
+  fundo.innerHTML = `
+    <div class="conteudo" role="dialog" aria-modal="true" aria-label="${esc(titulo)}">
+      <button class="fechar" type="button" aria-label="Fechar">${svg('fechar')}</button>
+      <h2>${esc(titulo)}</h2>
+      <div class="corpo-janela">${corpoHtml}</div>
+    </div>`;
+  const fechar = () => fundo.remove();
+  fundo.querySelector('.fechar').onclick = fechar;
+  fundo.onclick = (e) => { if (e.target === fundo) fechar(); };
+  document.addEventListener('keydown', function escuta(e) {
+    if (e.key === 'Escape') { fechar(); document.removeEventListener('keydown', escuta); }
+  });
+  document.body.appendChild(fundo);
+  return { elemento: fundo.querySelector('.corpo-janela'), fechar };
+}
+
+function mostraErro(form, mensagem) {
+  let caixa = form.querySelector('.aviso.erro');
+  if (!caixa) {
+    caixa = document.createElement('div');
+    caixa.className = 'aviso erro';
+    caixa.setAttribute('role', 'alert');
+    form.prepend(caixa);
+  }
+  caixa.textContent = mensagem;
+  caixa.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+}
+
+function aoEnviar(form, acao) {
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const botao = form.querySelector('button[type="submit"]');
+    const rotulo = botao?.textContent;
+    form.querySelector('.aviso.erro')?.remove();
+    if (botao) { botao.disabled = true; botao.textContent = 'Salvando…'; }
+    try {
+      await acao(Object.fromEntries(new FormData(form)));
+    } catch (erro) {
+      mostraErro(form, erro.message);
+    } finally {
+      if (botao) { botao.disabled = false; botao.textContent = rotulo; }
+    }
+  });
+}
+
+function telaLogin(mensagem) {
+  clearInterval(avisos.timer);
+  avisos.timer = null;
+  document.body.classList.add('tela-entrada');
+  app.innerHTML = `
+    <div class="tela-login">
+      <form class="cartao" novalidate>
+        <div class="logo">${LOGO}</div>
+        <h1>${esc(window.NOME_SISTEMA || 'Controle da Frota')}</h1>
+        <p class="ajuda">Entre com o usuário que a empresa te passou.</p>
+        ${mensagem ? `<div class="aviso info">${esc(mensagem)}</div>` : ''}
+        <div class="campo">
+          <label for="usuario">Usuário</label>
+          <input id="usuario" name="usuario" autocomplete="username"
+                 autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div class="campo">
+          <label for="senha">Senha</label>
+          <input id="senha" name="senha" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="btn principal grande" type="submit">Entrar</button>
+      </form>
+    </div>`;
+  aoEnviar(app.querySelector('form'), async (dados) => {
+    if (!dados.usuario?.trim() || !dados.senha) throw new Error('Preencha usuário e senha.');
+    estado.usuario = await api('POST', 'login', {}, dados);
+    if (estado.usuario?.token) {
+      localStorage.setItem('frota_token', estado.usuario.token);
+    }
+    await iniciaApp();
+  });
+}
+
+const ABAS_MOTORISTA = [
+  { id: 'meus', ico: 'lista', nome: 'Meus gastos' },
+  { id: 'viagens', ico: 'rota', nome: 'Viagens' },
+  { id: 'perfil', ico: 'usuario', nome: 'Perfil' },
+];
+const ABAS_ADMIN = [
+  { id: 'panorama', ico: 'panorama', nome: 'Panorama' },
+  { id: 'lancamentos', ico: 'lista', nome: 'Lançamentos' },
+  { id: 'viagens', ico: 'rota', nome: 'Viagens' },
+  { id: 'ajustes', ico: 'ajustes', nome: 'Ajustes' },
+];
+const ehAdmin = () => estado.usuario?.papel === 'admin';
+const abas = () => (ehAdmin() ? ABAS_ADMIN : ABAS_MOTORISTA);
+
+async function iniciaApp() {
+  document.body.classList.remove('tela-entrada');
+  app.innerHTML = '<p class="carregando">Carregando…</p>';
+  const [categorias, caminhoes, usuarios, viagens] = await Promise.all([
+    api('GET', 'categorias'),
+    api('GET', 'caminhoes'),
+    api('GET', 'usuarios'),
+    api('GET', 'viagens', { status: 'aberta', limite: 100 }),
+  ]);
+  estado.categorias = categorias;
+  estado.caminhoes = caminhoes;
+  estado.usuarios = usuarios;
+  estado.viagensAbertas = viagens;
+  estado.aba = estado.aba || abas()[0].id;
+  desenhaEstrutura();
+  await abreAba(estado.aba);
+}
+
+function desenhaEstrutura() {
+  app.innerHTML = `
+    <div class="painel-layout">
+      <aside class="barra-lateral">
+        <div class="logo-marca">
+          <div class="icone-frota">${svg('caminhao')}</div>
+          <div class="info-marca">
+            <strong>${esc(window.NOME_SISTEMA || 'Controle da Frota')}</strong>
+            <span>${ehAdmin() ? 'Proprietário' : 'Motorista'}</span>
+          </div>
+        </div>
+        <div class="acao-rapida">
+          <button type="button" class="btn-lancar-rapido" id="b-acao-rapida">
+            ${svg('registrar')} <span>${ehAdmin() ? 'Novo Lançamento' : 'Novo Gasto'}</span>
+          </button>
+        </div>
+        <nav class="menu-navegacao" aria-label="Menu Principal">
+          ${abas().map((a) => `
+            <button type="button" class="menu-item" data-aba="${a.id}" aria-current="${a.id === estado.aba}">
+              ${svg(a.ico)} <span>${esc(a.nome)}</span>
+            </button>`).join('')}
+        </nav>
+        <div class="usuario-rodape">
+          <div class="usuario-card">
+            <div class="avatar-circulo">${iniciais(estado.usuario.nome)}</div>
+            <div class="usuario-dados">
+              <strong>${esc(estado.usuario.nome)}</strong>
+              <span>${ehAdmin() ? 'Administrador' : 'Motorista'}</span>
+            </div>
+          </div>
+          <button type="button" class="btn-sair-lateral" id="b-sair-sidebar" title="Sair da conta">
+            ${svg('sair')}
+          </button>
+        </div>
+      </aside>
+
+      <div class="area-principal">
+        <header class="barra-superior">
+          <div class="titulo-contexto">
+            <div class="logo-movel">
+              <div class="icone-frota" style="width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg, #4338ca 0%, #3b82f6 100%);display:grid;place-items:center;color:#fff;">${svg('caminhao')}</div>
+              <strong>${esc(window.NOME_SISTEMA || 'Controle da Frota')}</strong>
+            </div>
+          </div>
+          <div class="acoes-topo">
+            <button class="sino" type="button" id="b-avisos" aria-label="Notificações e Avisos">
+              ${svg('sino')}<span class="contador oculto" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="btn principal pequeno oculta-pc" id="b-acao-topo">
+              ${svg('registrar')} <span>${ehAdmin() ? 'Novo Lançamento' : 'Novo Gasto'}</span>
+            </button>
+          </div>
+        </header>
+
+        <main id="conteudo"><p class="carregando">Carregando…</p></main>
+      </div>
+
+      <nav class="dock-flutuante" aria-label="Navegação Rápida">
+        ${abas().map((a) => `
+          <button type="button" data-aba="${a.id}" aria-current="${a.id === estado.aba}">
+            ${svg(a.ico)}<span>${esc(a.nome)}</span>
+          </button>`).join('')}
+      </nav>
+    </div>`;
+
+  app.querySelectorAll('[data-aba]').forEach((b) => {
+    b.onclick = () => abreAba(b.dataset.aba);
+  });
+
+  const sino = document.getElementById('b-avisos');
+  if (sino) sino.onclick = abreAvisos;
+
+  const bSair = document.getElementById('b-sair-sidebar');
+  if (bSair) {
+    bSair.onclick = async () => {
+      if (!confirm('Tem certeza de que deseja sair da conta?')) return;
+      try { await api('POST', 'logout'); } catch {}
+      localStorage.removeItem('frota_token');
+      estado.usuario = null;
+      estado.aba = null;
+      telaLogin('Você saiu da conta.');
+    };
+  }
+
+  const aoLancarRapido = () => {
+    if (ehAdmin()) {
+      const { fechar } = janela('O que deseja registrar?', `
+        <div class="pilha">
+          <p class="ajuda" style="margin:0 0 14px 0;">Escolha o tipo de operação para lançar:</p>
+          <div class="acoes duas">
+            <button class="btn principal grande" type="button" id="m-novo-gasto">
+              ${svg('lista')} Registrar Gasto
+            </button>
+            <button class="btn principal grande" type="button" id="m-novo-frete" style="background:var(--verde);border-color:var(--verde);">
+              ${svg('registrar')} Registrar Frete
+            </button>
+          </div>
+        </div>`);
+      document.getElementById('m-novo-gasto').onclick = () => {
+        fechar();
+        abreFormLancamento('saida', null, () => abreAba(estado.aba));
+      };
+      document.getElementById('m-novo-frete').onclick = () => {
+        fechar();
+        abreFormLancamento('entrada', null, () => abreAba(estado.aba));
+      };
+    } else {
+      abreFormLancamento('saida', null, () => abreAba(estado.aba));
+    }
+  };
+
+  const bRapido = document.getElementById('b-acao-rapida');
+  if (bRapido) bRapido.onclick = aoLancarRapido;
+  const bTopo = document.getElementById('b-acao-topo');
+  if (bTopo) bTopo.onclick = aoLancarRapido;
+
+  iniciaAvisos();
+}
+
+async function abreAba(id) {
+  estado.aba = id;
+  app.querySelectorAll('[data-aba]').forEach((b) => {
+    b.setAttribute('aria-current', String(b.dataset.aba === id));
+  });
+  const vez = ++estado.versaoAba;
+  const alvo = document.createElement('div');
+  alvo.innerHTML = '<p class="carregando">Carregando…</p>';
+  document.getElementById('conteudo').replaceChildren(alvo);
+  window.scrollTo({ top: 0 });
+  const telas = {
+    novo: telaNovoGasto,
+    meus: telaLancamentos,
+    lancamentos: telaLancamentos,
+    viagens: telaViagens,
+    panorama: telaPanorama,
+    ajustes: telaAjustes,
+    perfil: telaAjustes,
+  };
+  try {
+    await telas[id](alvo);
+  } catch (erro) {
+    if (vez !== estado.versaoAba) return;
+    alvo.innerHTML = `<div class="aviso erro">${esc(erro.message)}</div>`;
+  }
+}
+
+async function recarregaBasico() {
+  const [categorias, caminhoes, usuarios, viagens] = await Promise.all([
+    api('GET', 'categorias'),
+    api('GET', 'caminhoes'),
+    api('GET', 'usuarios'),
+    api('GET', 'viagens', { status: 'aberta', limite: 100 }),
+  ]);
+  estado.categorias = categorias;
+  estado.caminhoes = caminhoes;
+  estado.usuarios = usuarios;
+  estado.viagensAbertas = viagens;
+}
+
+const avisos = { ultimoId: null, timer: null };
+
+const ACOES_AVISO = {
+  criou: { saida: 'registrou um gasto', entrada: 'registrou uma entrada' },
+  editou: { saida: 'editou um gasto', entrada: 'editou uma entrada' },
+  excluiu: { saida: 'excluiu um gasto', entrada: 'excluiu uma entrada' },
+  abriu: { viagem: 'abriu uma viagem' },
+};
+
+function textoAviso(a) {
+  return `${a.motorista} ${ACOES_AVISO[a.acao]?.[a.tipo] || a.acao}`;
+}
+
+function quandoAviso(segundos) {
+  const s = Number(segundos) || 0;
+  if (s < 60) return 'agora mesmo';
+  if (s < 3600) return `há ${Math.floor(s / 60)} min`;
+  if (s < 86400) return `há ${Math.floor(s / 3600)} h`;
+  const dias = Math.floor(s / 86400);
+  return dias === 1 ? 'ontem' : `há ${dias} dias`;
+}
+
+function mostraContador(n) {
+  const contador = document.querySelector('#b-avisos .contador');
+  if (!contador) return;
+  contador.textContent = n > 99 ? '99+' : String(n);
+  contador.classList.toggle('oculto', !n);
+  document.getElementById('b-avisos').setAttribute('aria-label',
+    n ? `Avisos dos motoristas: ${n} ${n === 1 ? 'novo' : 'novos'}` : 'Avisos dos motoristas');
+}
+
+async function notificaAparelho(texto) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const titulo = window.NOME_SISTEMA || 'Controle da Frota';
+  const opcoes = { body: texto, icon: 'assets/logo.png', tag: 'frota-avisos' };
+  try {
+    const registro = await navigator.serviceWorker?.getRegistration();
+    if (registro) await registro.showNotification(titulo, opcoes);
+    else new Notification(titulo, opcoes);
+  } catch {
+    // Alguns celulares não deixam mostrar; o aviso dentro do app continua aparecendo.
+  }
+}
+
+async function verificaAvisos() {
+  if (!estado.usuario) return null;
+  let r;
+  try {
+    r = await api('GET', 'avisos');
+  } catch {
+    return null;
+  }
+  mostraContador(r.nao_lidos);
+  if (avisos.ultimoId !== null && r.ultimo_id > avisos.ultimoId) {
+    const novos = r.itens.filter((a) => Number(a.id) > avisos.ultimoId);
+    if (novos.length) {
+      const texto = novos.length === 1
+        ? `${textoAviso(novos[0])}: ${novos[0].resumo}`
+        : `${novos.length} novas movimentações registradas na frota.`;
+      recado(texto);
+      notificaAparelho(texto);
+    }
+  }
+  avisos.ultimoId = r.ultimo_id;
+  return r;
+}
+
+function iniciaAvisos() {
+  clearInterval(avisos.timer);
+  avisos.timer = null;
+  avisos.ultimoId = null;
+  if (!estado.usuario) return;
+  verificaAvisos();
+  avisos.timer = setInterval(() => { if (!document.hidden) verificaAvisos(); }, 35000);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && avisos.timer) verificaAvisos();
+});
+
+async function abreAvisos() {
+  const r = await verificaAvisos();
+  if (!r) {
+    recado('Não foi possível carregar as notificações.');
+    return;
+  }
+  const podePedir = 'Notification' in window && Notification.permission === 'default';
+  const naoLidosOriginais = new Set(r.itens.filter((a) => a.novo).map((a) => a.id));
+  let filtroAvisos = 'todos';
+
+  function iconeAviso(a) {
+    if (a.tipo === 'entrada') return icone('receber');
+    if (a.tipo === 'viagem') return icone('caminhao');
+    if (a.acao === 'editou') return icone('editar');
+    if (a.acao === 'excluiu') return icone('lixeira');
+    if (a.resumo && /diesel|litro|abastec/i.test(a.resumo)) return icone('combustivel');
+    return icone('gasto');
+  }
+
+  function renderItens() {
+    const filtrados = r.itens.filter((a) => {
+      if (filtroAvisos === 'nao_lidos') return naoLidosOriginais.has(a.id);
+      return true;
+    });
+
+    if (!filtrados.length) {
+      return `
+        <div class="vazio" style="padding:28px 16px;text-align:center">
+          <div style="margin-bottom:8px;color:var(--primaria)">${icone('sino')}</div>
+          <p style="font-weight:600;margin:0 0 4px">Tudo limpo por aqui!</p>
+          <small style="color:var(--tinta-3)">${filtroAvisos === 'nao_lidos' ? 'Nenhuma notificação não lida.' : 'Nenhuma notificação registrada recentemente.'}</small>
+        </div>`;
+    }
+
+    return `
+      <div class="lista-notificacoes-elevada">
+        ${filtrados.map((a) => {
+          const ehEntrada = a.tipo === 'entrada';
+          const ehViagem = a.tipo === 'viagem';
+          const ehExclusao = a.acao === 'excluiu';
+          const corClasse = ehEntrada ? 'entrada' : (ehViagem ? 'viagem' : (ehExclusao ? 'exclusao' : 'saida'));
+          const eNova = naoLidosOriginais.has(a.id);
+          return `
+            <div class="card-notificacao ${eNova ? 'nao-lida' : ''} ${a.lancamento_id ? 'interativa' : ''}"
+                 ${a.lancamento_id ? `data-lancamento="${a.lancamento_id}"` : ''}
+                 role="${a.lancamento_id ? 'button' : 'article'}" tabindex="${a.lancamento_id ? '0' : '-1'}">
+              <div class="icone-notificacao ${corClasse}">
+                ${iconeAviso(a)}
+              </div>
+              <div class="corpo-notificacao">
+                <div class="topo-notificacao">
+                  <strong>${esc(textoAviso(a))}</strong>
+                  ${eNova ? '<span class="badge-notificacao-nova">Nova</span>' : ''}
+                </div>
+                <div class="resumo-notificacao">${esc(a.resumo)}</div>
+                <div class="meta-notificacao">
+                  <span class="tempo-notificacao">${icone('relogio')} ${quandoAviso(a.segundos)}</span>
+                  ${a.lancamento_id ? '<span class="dica-toque-notificacao">Toque para ver lançamento ›</span>' : ''}
+                </div>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>`;
+  }
+
+  const { elemento, fechar } = janela('Central de Notificações', `
+    <div class="painel-notificacoes-modal">
+      <div class="topo-acoes-notificacoes">
+        <div class="filtro-pills-ajustes" role="group" aria-label="Filtrar notificações" style="margin:0">
+          <button type="button" id="tab-notif-todas" class="tab-notif" data-filtro="todos" aria-pressed="true">
+            Todas (${r.itens.length})
+          </button>
+          <button type="button" id="tab-notif-novas" class="tab-notif" data-filtro="nao_lidos" aria-pressed="false">
+            Não lidas (${r.nao_lidos})
+          </button>
+        </div>
+        ${r.nao_lidos > 0 ? `
+          <button class="btn pequeno" type="button" id="b-marcar-todas-lidas" style="font-size:0.75rem">
+            ${icone('check')} Marcar lidas
+          </button>` : ''}
+      </div>
+
+      ${podePedir ? `
+        <div class="aviso info" style="margin:12px 0 8px 0;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <span style="font-size:0.82rem">Receber alertas na tela deste celular?</span>
+          <button class="btn pequeno principal" type="button" data-permitir style="margin:0;padding:4px 10px;font-size:0.75rem">
+            Ativar Alertas
+          </button>
+        </div>` : ''}
+
+      <div id="container-lista-notificacoes" style="margin-top:12px">
+        ${renderItens()}
+      </div>
+    </div>`);
+
+  const container = elemento.querySelector('#container-lista-notificacoes');
+
+  function atualizaLista() {
+    container.innerHTML = renderItens();
+    ligaItens(container);
+  }
+
+  elemento.querySelectorAll('.tab-notif').forEach((b) => {
+    b.onclick = () => {
+      filtroAvisos = b.dataset.filtro;
+      elemento.querySelectorAll('.tab-notif').forEach((tb) => {
+        tb.setAttribute('aria-pressed', String(tb === b));
+      });
+      atualizaLista();
+    };
+  });
+
+  const bMarcar = elemento.querySelector('#b-marcar-todas-lidas');
+  if (bMarcar) {
+    bMarcar.onclick = async () => {
+      try {
+        await api('POST', 'avisos-lidos');
+        mostraContador(0);
+        naoLidosOriginais.clear();
+        r.itens.forEach((a) => { a.novo = false; });
+        r.nao_lidos = 0;
+        bMarcar.remove();
+        const tabNovas = elemento.querySelector('#tab-notif-novas');
+        if (tabNovas) tabNovas.textContent = 'Não lidas (0)';
+        atualizaLista();
+        recado('Notificações marcadas como lidas.');
+      } catch {}
+    };
+  }
+
+  elemento.querySelector('[data-permitir]')?.addEventListener('click', async (e) => {
+    const caixa = e.target.closest('.aviso');
+    const resposta = await Notification.requestPermission();
+    caixa.textContent = resposta === 'granted'
+      ? 'Notificações ativadas neste aparelho.'
+      : 'Notificações bloqueadas no navegador. Os avisos continuam aparecendo aqui.';
+  });
+
+  ligaItens(container);
+
+  if (r.nao_lidos) {
+    try {
+      await api('POST', 'avisos-lidos');
+      mostraContador(0);
+      r.nao_lidos = 0;
+    } catch {}
+  }
+}
+
+const PAGAMENTOS = ['Dinheiro', 'Cartão da empresa', 'Pix', 'Cartão frete', 'Boleto', 'Do próprio bolso'];
+
+function comOExtra(lista, extra) {
+  if (extra?.id && !lista.some((x) => Number(x.id) === Number(extra.id))) {
+    return [...lista, { ...extra, id: Number(extra.id) }];
+  }
+  return lista;
+}
+
+function opcoesCaminhao(selecionado, extra) {
+  return [
+    '<option value="">Selecione o caminhão</option>',
+    ...comOExtra(estado.caminhoes, extra).map((c) => `
+      <option value="${c.id}" ${Number(selecionado) === Number(c.id) ? 'selected' : ''}>
+        ${esc(c.placa)}${c.apelido ? ` — ${esc(c.apelido)}` : ''}
+      </option>`),
+  ].join('');
+}
+
+function opcoesViagem(selecionado, extra) {
+  return [
+    '<option value="">Fora de viagem</option>',
+    ...comOExtra(estado.viagensAbertas, extra).map((v) => `
+      <option value="${v.id}" ${Number(selecionado) === Number(v.id) ? 'selected' : ''}>
+        ${esc(v.origem)} → ${esc(v.destino)}${v.inicio ? ` (saída ${dataDiaMes(v.inicio)})` : ''}
+      </option>`),
+  ].join('');
+}
+
+function opcoesMotorista(selecionado) {
+  return estado.usuarios.filter((u) => Number(u.ativo)).map((u) => `
+    <option value="${u.id}" ${Number(selecionado) === Number(u.id) ? 'selected' : ''}>
+      ${esc(u.nome)}${u.papel === 'admin' ? ' (proprietário)' : ''}
+    </option>`).join('');
+}
+
+function categoriasDoTipo(tipo) {
+  return estado.categorias.filter((c) => c.tipo === tipo);
+}
+
+function camposLancamento(tipo, l = {}) {
+  const entrada = tipo === 'entrada';
+  const valorInicial = l.valor_centavos
+    ? (l.valor_centavos / 100).toFixed(2).replace('.', ',')
+    : '';
+  const lista = comOExtra(categoriasDoTipo(tipo), l.categoria_id ? {
+    id: l.categoria_id,
+    nome: l.categoria,
+    pede_litros: l.litros ? 1 : 0,
+    pede_descricao: l.descricao ? 1 : 0,
+  } : null);
+
+  return `
+    ${ehAdmin() ? `
+      <div class="campo">
+        <label for="c-motorista">${entrada ? 'Lançado por' : 'Motorista'}</label>
+        <select id="c-motorista" name="usuario_id">
+          ${opcoesMotorista(l.usuario_id || estado.usuario.id)}
+        </select>
+      </div>` : ''}
+
+    <div class="linha duas">
+      <div class="campo">
+        <label for="c-data">${entrada ? 'Dia do recebimento' : 'Dia do gasto'}</label>
+        <input id="c-data" name="data" type="date" required value="${esc(l.data || hoje())}">
+      </div>
+      <div class="campo">
+        <label for="c-caminhao">Caminhão</label>
+        <select id="c-caminhao" name="caminhao_id">
+          ${opcoesCaminhao(l.caminhao_id || (l.id ? null : (ehAdmin() ? (estado.usuarios.find((u) => Number(u.id) === Number(l.usuario_id || estado.usuario.id))?.caminhao_padrao_id || estado.usuario.caminhao_padrao_id) : estado.usuario.caminhao_padrao_id)), l.placa
+            ? { id: l.caminhao_id, placa: l.placa, apelido: l.caminhao_apelido } : null)}
+        </select>
+      </div>
+    </div>
+
+    <div class="campo opcional" style="margin-top:16px">
+      <label for="c-viagem">Viagem</label>
+      <p class="dica">${entrada
+        ? 'Se este frete é de uma viagem aberta, escolha ela.'
+        : 'Se o gasto foi numa viagem, escolha ela aqui.'}</p>
+      <select id="c-viagem" name="viagem_id">
+        ${opcoesViagem(l.viagem_id, l.viagem_origem
+          ? { id: l.viagem_id, origem: l.viagem_origem, destino: l.viagem_destino } : null)}
+      </select>
+      <button class="btn pequeno botao-nova-viagem" type="button" data-nova-viagem>+ Registrar nova viagem</button>
+      <div class="caixa-viagem oculto" data-se="nova-viagem">
+        <strong>Nova viagem</strong>
+        <div class="linha duas">
+          <div class="campo">
+            <label for="nv-origem">Saindo de</label>
+            <input id="nv-origem" maxlength="80" placeholder="Cidade de saída">
+          </div>
+          <div class="campo">
+            <label for="nv-destino">Indo para</label>
+            <input id="nv-destino" maxlength="80" placeholder="Cidade de destino">
+          </div>
+        </div>
+        <div class="linha duas">
+          <div class="campo">
+            <label for="nv-inicio">Dia da saída</label>
+            <input id="nv-inicio" type="date">
+          </div>
+          <div class="campo opcional">
+            <label for="nv-km">Km do painel na saída</label>
+            <input id="nv-km" inputmode="numeric">
+          </div>
+        </div>
+        <p class="dica">A viagem fica com o mesmo caminhão${ehAdmin() ? ' e motorista' : ''} deste lançamento.</p>
+        <div class="acoes fim">
+          <button class="btn" type="button" data-nv-cancelar>Cancelar</button>
+          <button class="btn principal" type="button" data-nv-salvar>Abrir viagem</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="campo">
+      <label>${entrada ? 'Tipo de frete' : 'Tipo de gasto'}</label>
+      <p class="dica">Toque na opção.</p>
+      <div class="categorias" role="group">
+        ${lista.map((c) => `
+          <button type="button" class="opcao-categoria" data-id="${c.id}"
+                  data-litros="${c.pede_litros}" data-descricao="${c.pede_descricao}"
+                  aria-pressed="${Number(l.categoria_id) === Number(c.id)}">
+            ${esc(c.nome)}
+          </button>`).join('')}
+      </div>
+      <input type="hidden" name="categoria_id" value="${esc(l.categoria_id || '')}">
+    </div>
+
+    <div class="campo oculto" data-se="descricao">
+      <label for="c-descricao">${entrada ? 'Do que foi essa entrada?' : 'O que foi esse gasto?'}</label>
+      <p class="dica">${entrada
+        ? 'Ex.: frete de adubo, venda de pneu usado.'
+        : 'Ex.: chapa para descarga, guincho, cafezinho da equipe.'}</p>
+      <input id="c-descricao" name="descricao" maxlength="140" value="${esc(l.descricao || '')}">
+    </div>
+
+    <div class="campo">
+      <label for="c-valor">${entrada ? 'Valor recebido' : 'Valor pago'}</label>
+      <div class="valor-caixa">
+        <span aria-hidden="true">R$</span>
+        <input id="c-valor" name="valor" inputmode="decimal" required placeholder="0,00"
+               value="${esc(valorInicial)}" aria-label="Valor em reais">
+      </div>
+    </div>
+
+    <div class="linha duas oculto" data-se="litros">
+      <div class="campo">
+        <label for="c-litros">Litros abastecidos</label>
+        <input id="c-litros" name="litros" inputmode="decimal" placeholder="0"
+               value="${esc(l.litros ?? '')}">
+      </div>
+      <div class="campo opcional">
+        <label for="c-km">Km do painel</label>
+        <input id="c-km" name="km" inputmode="numeric" placeholder="0" value="${esc(l.km ?? '')}">
+      </div>
+    </div>
+    <p class="aviso info oculto" data-se="preco-litro"></p>
+
+    ${entrada ? `
+      <div class="campo opcional">
+        <label for="c-cliente">Quem pagou</label>
+        <p class="dica">Nome do cliente, cooperativa ou empresa.</p>
+        <input id="c-cliente" name="cliente" maxlength="90" value="${esc(l.cliente || '')}">
+      </div>` : ''}
+
+    <div class="linha duas">
+      <div class="campo opcional">
+        <label for="c-lugar">${entrada ? 'Cidade / local' : 'Onde foi'}</label>
+        <input id="c-lugar" name="lugar" maxlength="90"
+               placeholder="${entrada ? 'Cidade da carga' : 'Posto, cidade, oficina…'}"
+               value="${esc(l.lugar || '')}">
+      </div>
+      <div class="campo opcional">
+        <label for="c-pagamento">${entrada ? 'Como recebeu' : 'Como pagou'}</label>
+        <select id="c-pagamento" name="pagamento">
+          <option value="">Não informar</option>
+          ${PAGAMENTOS.map((p) => `
+            <option value="${p}" ${l.pagamento === p ? 'selected' : ''}>${p}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    <div class="campo opcional" style="margin-top:16px">
+      <label for="c-observacao">Observação</label>
+      <textarea id="c-observacao" name="observacao" maxlength="500"
+                placeholder="Algo que o escritório precise saber">${esc(l.observacao || '')}</textarea>
+    </div>
+
+    <div class="campo opcional">
+      <label for="c-foto">${entrada ? 'Foto do comprovante' : 'Foto da nota'}</label>
+      <p class="dica">Tire a foto do cupom, nota ou comprovante.</p>
+      <label class="arquivo" for="c-foto">
+        <span class="btn pequeno" aria-hidden="true">Escolher foto</span>
+        <span data-nome-arquivo>Nenhuma foto escolhida</span>
+      </label>
+      <input id="c-foto" class="escondido" type="file" accept="image/*,application/pdf" capture="environment">
+      <input type="hidden" name="comprovante" value="${esc(l.comprovante || '')}">
+      <p class="aviso ok oculto" data-se="foto"></p>
+    </div>`;
+}
+
+async function reduzFoto(arquivo) {
+  if (!/^image\/(jpeg|png|webp)$/.test(arquivo.type) || arquivo.size < 400 * 1024) return arquivo;
+  try {
+    const imagem = await createImageBitmap(arquivo);
+    const escala = Math.min(1, 1600 / Math.max(imagem.width, imagem.height));
+    const tela = document.createElement('canvas');
+    tela.width = Math.round(imagem.width * escala);
+    tela.height = Math.round(imagem.height * escala);
+    tela.getContext('2d').drawImage(imagem, 0, 0, tela.width, tela.height);
+    const blob = await new Promise((pronto) => tela.toBlob(pronto, 'image/jpeg', 0.8));
+    return blob && blob.size < arquivo.size
+      ? new File([blob], 'comprovante.jpg', { type: 'image/jpeg' })
+      : arquivo;
+  } catch {
+    return arquivo;
+  }
+}
+
+function ligaCamposLancamento(form) {
+  const campoCategoria = form.elements.categoria_id;
+  const blocoLitros = form.querySelector('[data-se="litros"]');
+  const blocoDescricao = form.querySelector('[data-se="descricao"]');
+  const avisoPreco = form.querySelector('[data-se="preco-litro"]');
+  const avisoFoto = form.querySelector('[data-se="foto"]');
+
+  const soNumero = (v) => Number(String(v ?? '').replace(/\./g, '').replace(',', '.'));
+
+  function atualizaPrecoLitro() {
+    const litros = soNumero(form.elements.litros?.value);
+    const valor = soNumero(form.elements.valor.value);
+    if (litros > 0 && valor > 0 && !blocoLitros.classList.contains('oculto')) {
+      avisoPreco.textContent = `Deu ${BRL.format(valor / litros)} por litro.`;
+      avisoPreco.classList.remove('oculto');
+    } else {
+      avisoPreco.classList.add('oculto');
+    }
+  }
+
+  function selecionaCategoria(botao) {
+    form.querySelectorAll('.opcao-categoria').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b === botao));
+    });
+    campoCategoria.value = botao.dataset.id;
+    blocoLitros.classList.toggle('oculto', botao.dataset.litros !== '1');
+    blocoDescricao.classList.toggle('oculto', botao.dataset.descricao !== '1');
+    form.elements.descricao.required = botao.dataset.descricao === '1';
+    atualizaPrecoLitro();
+  }
+
+  form.querySelectorAll('.opcao-categoria').forEach((b) => {
+    b.onclick = () => selecionaCategoria(b);
+    if (b.getAttribute('aria-pressed') === 'true') selecionaCategoria(b);
+  });
+
+  form.elements.valor.addEventListener('blur', () => {
+    const n = soNumero(form.elements.valor.value);
+    if (Number.isFinite(n) && n > 0) form.elements.valor.value = n.toFixed(2).replace('.', ',');
+    atualizaPrecoLitro();
+  });
+  form.elements.litros?.addEventListener('input', atualizaPrecoLitro);
+
+  const campoFoto = form.querySelector('#c-foto');
+  const nomeFoto = form.querySelector('[data-nome-arquivo]');
+  const limpaFoto = () => {
+    campoFoto.value = '';
+    nomeFoto.textContent = 'Nenhuma foto escolhida';
+  };
+  campoFoto.addEventListener('change', async () => {
+    if (!campoFoto.files?.[0]) return;
+    nomeFoto.textContent = campoFoto.files[0].name;
+    avisoFoto.textContent = 'Enviando foto…';
+    avisoFoto.classList.remove('oculto');
+    const arquivo = await reduzFoto(campoFoto.files[0]);
+    if (arquivo.size > 8 * 1024 * 1024) {
+      avisoFoto.classList.add('oculto');
+      mostraErro(form, 'A foto é muito grande (máximo 8 MB).');
+      limpaFoto();
+      return;
+    }
+    try {
+      const corpo = new FormData();
+      corpo.append('foto', arquivo);
+      const token = localStorage.getItem('frota_token');
+      const resposta = await fetch(endereco('comprovante'), {
+        method: 'POST',
+        headers: {
+          'X-App-Frota': '1',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        },
+        credentials: 'include',
+        body: corpo,
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) throw new Error(dados.erro);
+      form.elements.comprovante.value = dados.comprovante;
+      avisoFoto.textContent = 'Comprovante anexado.';
+    } catch (erro) {
+      avisoFoto.classList.add('oculto');
+      mostraErro(form, erro.message || 'Não foi possível enviar a foto.');
+      limpaFoto();
+    }
+  });
+
+  if (form.elements.comprovante.value) {
+    avisoFoto.textContent = 'Comprovante já anexado.';
+    avisoFoto.classList.remove('oculto');
+  }
+
+  ligaNovaViagem(form);
+}
+
+function ligaNovaViagem(form) {
+  const caixa = form.querySelector('[data-se="nova-viagem"]');
+  const abrir = form.querySelector('[data-nova-viagem]');
+  const salvar = caixa.querySelector('[data-nv-salvar]');
+  const campo = (id) => caixa.querySelector(`#nv-${id}`);
+
+  const fecha = () => {
+    caixa.classList.add('oculto');
+    abrir.classList.remove('oculto');
+    ['origem', 'destino', 'km'].forEach((id) => { campo(id).value = ''; });
+  };
+
+  abrir.onclick = () => {
+    caixa.classList.remove('oculto');
+    abrir.classList.add('oculto');
+    campo('inicio').value = form.elements.data.value || hoje();
+    campo('origem').focus();
+  };
+  caixa.querySelector('[data-nv-cancelar]').onclick = fecha;
+
+  salvar.onclick = async () => {
+    form.querySelector('.aviso.erro')?.remove();
+    const origem = campo('origem').value.trim();
+    const destino = campo('destino').value.trim();
+    if (!origem || !destino) {
+      mostraErro(form, 'Informe de onde a viagem está saindo e para onde vai.');
+      return;
+    }
+    salvar.disabled = true;
+    salvar.textContent = 'Abrindo…';
+    try {
+      const { id } = await api('POST', 'viagens', {}, {
+        origem,
+        destino,
+        inicio: campo('inicio').value || hoje(),
+        km_inicial: campo('km').value,
+        caminhao_id: form.elements.caminhao_id.value,
+        usuario_id: form.elements.usuario_id?.value,
+      });
+      estado.viagensAbertas = await api('GET', 'viagens', { status: 'aberta', limite: 100 });
+      form.elements.viagem_id.innerHTML = opcoesViagem(id);
+      fecha();
+      recado('Viagem aberta e escolhida neste lançamento.');
+    } catch (erro) {
+      mostraErro(form, erro.message);
+    } finally {
+      salvar.disabled = false;
+      salvar.textContent = 'Abrir viagem';
+    }
+  };
+
+  caixa.querySelectorAll('input').forEach((input) => {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); salvar.click(); }
+    });
+  });
+}
+
+function validaLancamento(dados, tipo) {
+  if (!dados.categoria_id) {
+    throw new Error(tipo === 'entrada' ? 'Escolha o tipo de frete.' : 'Escolha o tipo de gasto.');
+  }
+  if (!String(dados.valor || '').trim()) throw new Error('Informe o valor.');
+  return dados;
+}
+
+function abreFormLancamento(tipoInicial, lancamento, aoConcluir) {
+  let tipoAtual = tipoInicial || 'saida';
+  const ehNovo = !lancamento;
+
+  function renderConteudo() {
+    return `
+      ${ehAdmin() && ehNovo ? `
+        <div class="seletor-tipo-lancamento" role="group" aria-label="Tipo de Lançamento">
+          <button type="button" class="btn-tipo-toggle ${tipoAtual === 'saida' ? 'ativo-saida' : ''}" data-tipo-opcao="saida">
+            ${icone('gasto')} Gasto (Saída)
+          </button>
+          <button type="button" class="btn-tipo-toggle ${tipoAtual === 'entrada' ? 'ativo-entrada' : ''}" data-tipo-opcao="entrada">
+            ${icone('receber')} Frete (Entrada)
+          </button>
+        </div>` : ''}
+      ${camposLancamento(tipoAtual, lancamento || {})}
+      <div class="acoes fim" style="margin-top:16px">
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">${lancamento ? 'Salvar alterações' : 'Salvar lançamento'}</button>
+      </div>`;
+  }
+
+  const titulo = lancamento
+    ? (tipoAtual === 'entrada' ? 'Editar Entrada (Frete)' : 'Editar Gasto')
+    : (tipoAtual === 'entrada' ? 'Novo Frete / Entrada' : 'Novo Gasto / Despesa');
+
+  const { elemento, fechar } = janela(titulo, `
+    <form novalidate id="form-registro-lancamento">
+      ${renderConteudo()}
+    </form>`);
+
+  const form = elemento.querySelector('form');
+
+  function ligaEventosForm() {
+    form.querySelector('[data-cancelar]').onclick = fechar;
+    ligaCamposLancamento(form);
+
+    if (ehAdmin() && ehNovo) {
+      form.querySelectorAll('[data-tipo-opcao]').forEach((btn) => {
+        btn.onclick = () => {
+          const novoTipo = btn.dataset.tipoOpcao;
+          if (novoTipo === tipoAtual) return;
+          tipoAtual = novoTipo;
+          const h2 = elemento.querySelector('h2');
+          if (h2) h2.textContent = tipoAtual === 'entrada' ? 'Novo Frete / Entrada' : 'Novo Gasto / Despesa';
+          form.innerHTML = renderConteudo();
+          ligaEventosForm();
+        };
+      });
+    }
+  }
+
+  ligaEventosForm();
+
+  aoEnviar(form, async (dados) => {
+    validaLancamento(dados, tipoAtual);
+    if (lancamento) await api('PUT', 'lancamento', { id: lancamento.id }, dados);
+    else await api('POST', 'lancamentos', {}, dados);
+    fechar();
+    recado(lancamento ? 'Lançamento atualizado.' : 'Lançamento registrado com sucesso!');
+    await aoConcluir?.();
+  });
+}
+
+async function telaNovoGasto(alvo) {
+  const ultimoCaminhao = localStorage.getItem('ultimo_caminhao') || '';
+  alvo.innerHTML = `
+    <div class="pilha">
+      <div class="titulo-secao">
+        <h1>Registrar gasto</h1>
+        <p>Preencha os campos e toque em salvar.</p>
+      </div>
+      ${estado.caminhoes.length === 0 ? `
+        <div class="aviso info">Nenhum caminhão cadastrado ainda. Fale com o escritório.</div>` : ''}
+      <form class="cartao" novalidate>
+        ${camposLancamento('saida', { caminhao_id: ultimoCaminhao })}
+        <button class="btn principal grande" type="submit">Salvar gasto</button>
+      </form>
+      <div id="resumo-hoje"></div>
+    </div>`;
+
+  const form = alvo.querySelector('form');
+  ligaCamposLancamento(form);
+  aoEnviar(form, async (dados) => {
+    validaLancamento(dados, 'saida');
+    await api('POST', 'lancamentos', {}, dados);
+    localStorage.setItem('ultimo_caminhao', dados.caminhao_id || '');
+    recado('Gasto salvo.');
+    const guardar = {
+      data: dados.data,
+      caminhao_id: dados.caminhao_id,
+      viagem_id: dados.viagem_id,
+    };
+    form.innerHTML = `${camposLancamento('saida', guardar)}
+      <button class="btn principal grande" type="submit">Salvar gasto</button>`;
+    ligaCamposLancamento(form);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    await mostraResumoHoje();
+  });
+  await mostraResumoHoje();
+}
+
+async function mostraResumoHoje() {
+  const caixa = document.getElementById('resumo-hoje');
+  if (!caixa) return;
+  const r = await api('GET', 'lancamentos', { de: hoje(), ate: hoje(), limite: 5 });
+  if (!r.qtd) { caixa.innerHTML = ''; return; }
+  caixa.innerHTML = `
+    <div class="cartao">
+      <h2>Registrado hoje</h2>
+      <p class="ajuda">${r.qtd} ${r.qtd === 1 ? 'gasto' : 'gastos'} — total ${dinheiro(r.saidas_centavos)}</p>
+      <div class="lista">${r.itens.map(itemLancamento).join('')}</div>
+    </div>`;
+  ligaItens(caixa);
+}
+
+function itemLancamento(l) {
+  const entrada = l.tipo === 'entrada';
+  const dataFormatada = dataCurta(l.data);
+  const placa = l.placa ? `<span class="badge-placa">${esc(l.placa)}</span>` : '';
+  const motorista = ehAdmin() && l.motorista ? `<span>${esc(l.motorista)}</span>` : '';
+  const rota = l.viagem_origem ? `<span>${esc(l.viagem_origem)} → ${esc(l.viagem_destino)}</span>` : '';
+  const litros = l.litros ? `<span>${numero(l.litros)} L</span>` : '';
+  const precoLitro = l.litros && l.valor_centavos ? `<span>${dinheiro(l.valor_centavos / l.litros)}/L</span>` : '';
+  const cliente = l.cliente ? `<span>${esc(l.cliente)}</span>` : '';
+
+  const metaDetalhes = [motorista, rota, litros, precoLitro, cliente].filter(Boolean).join('<span class="separador-ponto">·</span>');
+
+  return `
+    <div class="item-lancamento-moderno" data-lancamento="${l.id}" role="button" tabindex="0">
+      <div class="icone-lancamento ${entrada ? 'entrada' : 'saida'}">
+        ${entrada ? icone('receber') : (l.litros ? icone('combustivel') : icone('gasto'))}
+      </div>
+      <div class="info-lancamento">
+        <div class="topo-lancamento">
+          <span class="nome-lancamento">${esc(l.descricao || l.categoria)}</span>
+          ${placa}
+        </div>
+        <div class="meta-lancamento">
+          <span>${dataFormatada}</span>
+          ${metaDetalhes ? `<span class="separador-ponto">·</span>${metaDetalhes}` : ''}
+        </div>
+      </div>
+      <div class="valor-lancamento">
+        <span class="quantia ${entrada ? 'entrada' : 'saida'}">
+          ${entrada ? '+' : '−'}&nbsp;${dinheiro(l.valor_centavos)}
+        </span>
+        <span class="seta-acao">${icone('setaDireita')}</span>
+      </div>
+    </div>`;
+}
+
+function ligaItens(raiz) {
+  raiz.querySelectorAll('[data-lancamento]').forEach((b) => {
+    b.onclick = () => abreLancamento(Number(b.dataset.lancamento));
+    b.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        abreLancamento(Number(b.dataset.lancamento));
+      }
+    };
+  });
+}
+
+function filtrosAtuais() {
+  const f = { mes: estado.mes, limite: 300 };
+  for (const chave of ['usuario_id', 'caminhao_id', 'categoria_id', 'tipo', 'busca']) {
+    if (estado.filtros[chave]) f[chave] = estado.filtros[chave];
+  }
+  return f;
+}
+
+async function telaLancamentos(alvo) {
+  const admin = ehAdmin();
+  let itensCarregados = [];
+
+  function totalFiltrosAtivos() {
+    let cont = 0;
+    if (estado.filtros.tipo) cont++;
+    if (estado.filtros.categoria_id) cont++;
+    if (estado.filtros.usuario_id) cont++;
+    if (estado.filtros.caminhao_id) cont++;
+    if (estado.mes !== hoje().slice(0, 7)) cont++;
+    return cont;
+  }
+
+  alvo.innerHTML = `
+    <div class="pilha">
+      <div class="titulo-secao">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div>
+            <h1>${admin ? 'Lançamentos' : 'Meus gastos'}</h1>
+            <p id="rotulo-mes" style="font-weight:600;color:var(--tinta-2)">${mesLongo(estado.mes)}</p>
+          </div>
+          <div class="acoes" style="margin:0">
+            ${admin ? `
+              <button class="btn pequeno" type="button" id="b-exportar-csv" title="Exportar CSV">
+                ${icone('download')} <span class="oculta-celular">CSV</span>
+              </button>
+              <a class="btn pequeno" id="b-pdf" href="#" target="_blank" title="Relatório PDF">
+                ${icone('pdf')} <span class="oculta-celular">PDF</span>
+              </a>` : ''}
+            <button class="btn principal pequeno" type="button" id="b-novo-lancamento">
+              ${icone('adicionar')} <span>Novo Lançamento</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="cartao" style="padding:14px 16px">
+        <div class="barra-lancamentos-controles">
+          <div class="busca-com-icone" style="flex:1;position:relative">
+            <span class="lupa-icone">${icone('busca')}</span>
+            <input id="f-busca" type="search" placeholder="Buscar por descrição, motorista, placa ou cliente..."
+                   value="${esc(estado.filtros.busca || '')}" style="padding-left:38px;width:100%">
+          </div>
+          <button class="btn-filtro-unico" type="button" id="b-abrir-filtros" title="Filtros avançados" aria-haspopup="dialog">
+            ${icone('filtro')}
+            <span>Filtros</span>
+            <span class="badge-cont-filtros" id="cont-filtros-ativos" style="display:none">0</span>
+          </button>
+        </div>
+
+        <div class="chips-filtros-ativos" id="chips-filtros-ativos" style="display:none;margin-top:10px"></div>
+      </div>
+
+      <div id="resumo-kpis"></div>
+      <div id="lista"><p class="carregando">Carregando lançamentos…</p></div>
+    </div>`;
+
+  function atualizaBadgeFiltros() {
+    const cont = totalFiltrosAtivos();
+    const badge = alvo.querySelector('#cont-filtros-ativos');
+    if (badge) {
+      badge.textContent = String(cont);
+      badge.style.display = cont > 0 ? 'inline-flex' : 'none';
+    }
+
+    const chips = alvo.querySelector('#chips-filtros-ativos');
+    if (chips) {
+      const itensChips = [];
+      if (estado.mes !== hoje().slice(0, 7)) {
+        itensChips.push(`<span class="chip-filtro">Mês: ${mesCurto(estado.mes)} <button type="button" data-limpar-chip="mes">×</button></span>`);
+      }
+      if (estado.filtros.tipo) {
+        itensChips.push(`<span class="chip-filtro">Tipo: ${estado.filtros.tipo === 'entrada' ? 'Entradas' : 'Saídas'} <button type="button" data-limpar-chip="tipo">×</button></span>`);
+      }
+      if (estado.filtros.categoria_id) {
+        const cat = estado.categorias.find((c) => Number(c.id) === Number(estado.filtros.categoria_id));
+        if (cat) itensChips.push(`<span class="chip-filtro">Cat: ${esc(cat.nome)} <button type="button" data-limpar-chip="categoria_id">×</button></span>`);
+      }
+      if (estado.filtros.caminhao_id) {
+        const cam = estado.caminhoes.find((c) => Number(c.id) === Number(estado.filtros.caminhao_id));
+        if (cam) itensChips.push(`<span class="chip-filtro">Caminhão: ${esc(cam.placa)} <button type="button" data-limpar-chip="caminhao_id">×</button></span>`);
+      }
+      if (estado.filtros.usuario_id) {
+        const usr = estado.usuarios.find((u) => Number(u.id) === Number(estado.filtros.usuario_id));
+        if (usr) itensChips.push(`<span class="chip-filtro">Motorista: ${esc(usr.nome)} <button type="button" data-limpar-chip="usuario_id">×</button></span>`);
+      }
+
+      if (itensChips.length) {
+        chips.innerHTML = `<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <small style="font-weight:700;color:var(--tinta-3);font-size:0.75rem">Filtros:</small>
+          ${itensChips.join('')}
+          <button type="button" class="btn-limpar-todos-chips" id="b-limpar-todos-chips">Limpar todos</button>
+        </div>`;
+        chips.style.display = 'block';
+
+        chips.querySelectorAll('[data-limpar-chip]').forEach((btn) => {
+          btn.onclick = () => {
+            const campo = btn.dataset.limparChip;
+            if (campo === 'mes') estado.mes = hoje().slice(0, 7);
+            else estado.filtros[campo] = '';
+            atualiza();
+          };
+        });
+
+        chips.querySelector('#b-limpar-todos-chips')?.addEventListener('click', () => {
+          estado.mes = hoje().slice(0, 7);
+          estado.filtros.tipo = '';
+          estado.filtros.categoria_id = '';
+          estado.filtros.caminhao_id = '';
+          estado.filtros.usuario_id = '';
+          atualiza();
+        });
+      } else {
+        chips.style.display = 'none';
+        chips.innerHTML = '';
+      }
+    }
+  }
+
+  const atualiza = async () => {
+    atualizaBadgeFiltros();
+    const caixaLista = document.getElementById('lista');
+    const caixaKpis = document.getElementById('resumo-kpis');
+    caixaLista.innerHTML = '<p class="carregando">Carregando…</p>';
+
+    const rotuloMes = document.getElementById('rotulo-mes');
+    if (rotuloMes) rotuloMes.textContent = mesLongo(estado.mes);
+
+    const r = await api('GET', 'lancamentos', filtrosAtuais());
+    itensCarregados = r.itens || [];
+    const pdfLink = document.getElementById('b-pdf');
+    if (pdfLink) pdfLink.href = endereco('pdf', filtrosAtuais());
+
+    if (!r.qtd) {
+      if (caixaKpis) caixaKpis.innerHTML = '';
+      caixaLista.innerHTML = `
+        <div class="vazio">
+          ${icone('busca')}
+          <p style="margin-top:8px">Nenhum lançamento encontrado para os filtros selecionados.</p>
+        </div>`;
+      return;
+    }
+
+    const saldo = r.saldo_centavos;
+    if (caixaKpis) {
+      caixaKpis.innerHTML = `
+        <div class="grade-kpis">
+          ${admin ? `
+          <div class="card-kpi">
+            <div class="icone-kpi verde">${icone('receber')}</div>
+            <div class="corpo-kpi">
+              <span class="rotulo">Total Entradas</span>
+              <span class="valor entrada">${dinheiro(r.entradas_centavos)}</span>
+              <span class="subtexto">Fretes confirmados</span>
+            </div>
+          </div>` : ''}
+          <div class="card-kpi">
+            <div class="icone-kpi vermelho">${icone('gasto')}</div>
+            <div class="corpo-kpi">
+              <span class="rotulo">${admin ? 'Total Saídas' : 'Seus Gastos'}</span>
+              <span class="valor saida">${dinheiro(r.saidas_centavos)}</span>
+              <span class="subtexto">${r.qtd} ${r.qtd === 1 ? 'registro' : 'registros'}</span>
+            </div>
+          </div>
+          ${admin ? `
+          <div class="card-kpi">
+            <div class="icone-kpi azul">${icone('saldo')}</div>
+            <div class="corpo-kpi">
+              <span class="rotulo">Saldo Líquido</span>
+              <span class="valor ${saldo >= 0 ? 'entrada' : 'saida'}">
+                ${saldo >= 0 ? '' : '−'}${dinheiro(Math.abs(saldo))}
+              </span>
+              <span class="subtexto">${saldo >= 0 ? 'Resultado positivo' : 'Atenção aos custos'}</span>
+            </div>
+          </div>` : ''}
+        </div>`;
+    }
+
+    caixaLista.innerHTML = `
+      <div class="cartao" style="padding:12px 14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 6px 10px;border-bottom:1px solid var(--borda);color:var(--tinta-3);font-size:0.75rem;font-weight:700;letter-spacing:0.04em">
+          <span>LANÇAMENTO & DETALHES</span>
+          <span>VALOR (R$)</span>
+        </div>
+        <div class="lista" id="itens-container">
+          ${itensCarregados.map(itemLancamento).join('')}
+        </div>
+      </div>`;
+    ligaItens(caixaLista);
+  };
+
+  let debounceBusca;
+  alvo.querySelector('#f-busca').oninput = (e) => {
+    clearTimeout(debounceBusca);
+    debounceBusca = setTimeout(() => {
+      estado.filtros.busca = e.target.value.trim();
+      atualiza();
+    }, 250);
+  };
+
+  // Single filter dialog opened by the filter button
+  alvo.querySelector('#b-abrir-filtros').onclick = () => {
+    let tipoTemp = estado.filtros.tipo || '';
+
+    const { elemento, fechar } = janela('Filtros de Lançamentos', `
+      <div class="pilha">
+        <div class="campo">
+          <label for="dlg-f-mes">Mês de referência</label>
+          <input id="dlg-f-mes" type="month" value="${estado.mes}">
+        </div>
+
+        <div class="campo">
+          <label>Tipo de lançamento</label>
+          <div class="seletor-tipo-lancamento" role="group" aria-label="Filtrar por tipo" style="margin-bottom:0">
+            <button type="button" class="btn-tipo-toggle ${!tipoTemp ? 'ativo-saida' : ''}" data-dlg-tipo="">
+              Todos
+            </button>
+            <button type="button" class="btn-tipo-toggle ${tipoTemp === 'entrada' ? 'ativo-entrada' : ''}" data-dlg-tipo="entrada">
+              ${icone('receber')} Entradas
+            </button>
+            <button type="button" class="btn-tipo-toggle ${tipoTemp === 'saida' ? 'ativo-saida' : ''}" data-dlg-tipo="saida">
+              ${icone('gasto')} Saídas
+            </button>
+          </div>
+        </div>
+
+        <div class="campo">
+          <label for="dlg-f-categoria">Categoria</label>
+          <select id="dlg-f-categoria">
+            <option value="">Todas as categorias</option>
+            ${[['saida', 'Saídas (Despesas)'], ['entrada', 'Entradas (Fretes)']].map(([tipo, grupo]) => {
+              const lista = categoriasDoTipo(tipo);
+              return lista.length ? `<optgroup label="${grupo}">${lista.map((c) => `
+                <option value="${c.id}" ${String(estado.filtros.categoria_id) === String(c.id) ? 'selected' : ''}>
+                  ${esc(c.nome)}
+                </option>`).join('')}</optgroup>` : '';
+            }).join('')}
+          </select>
+        </div>
+
+        ${admin ? `
+        <div class="linha duas">
+          <div class="campo">
+            <label for="dlg-f-motorista">Motorista</label>
+            <select id="dlg-f-motorista">
+              <option value="">Todos os motoristas</option>
+              ${opcoesMotorista(estado.filtros.usuario_id)}
+            </select>
+          </div>
+          <div class="campo">
+            <label for="dlg-f-caminhao">Caminhão</label>
+            <select id="dlg-f-caminhao">
+              <option value="">Todos os caminhões</option>
+              ${estado.caminhoes.map((c) => `
+                <option value="${c.id}" ${String(estado.filtros.caminhao_id) === String(c.id) ? 'selected' : ''}>
+                  ${esc(c.placa)}
+                </option>`).join('')}
+            </select>
+          </div>
+        </div>` : ''}
+
+        <div class="acoes fim" style="margin-top:16px">
+          <button class="btn" type="button" id="dlg-limpar-filtros">Limpar Tudo</button>
+          <button class="btn principal" type="button" id="dlg-aplicar-filtros">Aplicar Filtros</button>
+        </div>
+      </div>`);
+
+    elemento.querySelectorAll('[data-dlg-tipo]').forEach((btn) => {
+      btn.onclick = () => {
+        tipoTemp = btn.dataset.dlgTipo;
+        elemento.querySelectorAll('[data-dlg-tipo]').forEach((b) => {
+          b.className = `btn-tipo-toggle ${b.dataset.dlgTipo === tipoTemp ? (tipoTemp === 'entrada' ? 'ativo-entrada' : 'ativo-saida') : ''}`;
+        });
+      };
+    });
+
+    elemento.querySelector('#dlg-limpar-filtros').onclick = () => {
+      estado.mes = hoje().slice(0, 7);
+      estado.filtros.tipo = '';
+      estado.filtros.categoria_id = '';
+      estado.filtros.caminhao_id = '';
+      estado.filtros.usuario_id = '';
+      fechar();
+      atualiza();
+    };
+
+    elemento.querySelector('#dlg-aplicar-filtros').onclick = () => {
+      estado.mes = elemento.querySelector('#dlg-f-mes').value || hoje().slice(0, 7);
+      estado.filtros.tipo = tipoTemp;
+      estado.filtros.categoria_id = elemento.querySelector('#dlg-f-categoria').value || '';
+      if (admin) {
+        estado.filtros.usuario_id = elemento.querySelector('#dlg-f-motorista').value || '';
+        estado.filtros.caminhao_id = elemento.querySelector('#dlg-f-caminhao').value || '';
+      }
+      fechar();
+      atualiza();
+    };
+  };
+
+  alvo.querySelector('#b-novo-lancamento').onclick = () => {
+    abreFormLancamento('saida', null, atualiza);
+  };
+
+  const bCsv = alvo.querySelector('#b-exportar-csv');
+  if (bCsv) {
+    bCsv.onclick = () => {
+      if (!itensCarregados.length) {
+        recado('Nenhum dado para exportar.');
+        return;
+      }
+      exportarCSV(itensCarregados, `lancamentos-${estado.mes}.csv`);
+    };
+  }
+
+  await atualiza();
+}
+
+async function abreLancamento(id) {
+  const l = await api('GET', 'lancamento', { id });
+  const entrada = l.tipo === 'entrada';
+  const linhas = [
+    ['Tipo', l.categoria],
+    [entrada ? 'Valor recebido' : 'Valor pago', dinheiro(l.valor_centavos)],
+    ['Dia', dataCurta(l.data)],
+    [entrada ? 'Lançado por' : 'Motorista', l.motorista],
+    ['Caminhão', l.placa ? `${l.placa}${l.caminhao_apelido ? ` — ${l.caminhao_apelido}` : ''}` : '—'],
+    ['Viagem', l.viagem_origem ? `${l.viagem_origem} → ${l.viagem_destino}` : 'Fora de viagem'],
+    ['Litros', l.litros ? `${numero(l.litros)} L` : null],
+    ['Preço por litro', l.litros ? dinheiro(l.valor_centavos / l.litros) : null],
+    ['Km do painel', l.km ? numero(l.km) : null],
+    ['Quem pagou', l.cliente],
+    [entrada ? 'Cidade / local' : 'Onde foi', l.lugar],
+    [entrada ? 'Como recebeu' : 'Como pagou', l.pagamento],
+    ['Observação', l.observacao],
+  ].filter(([, v]) => v);
+
+  const { elemento, fechar } = janela(l.descricao || l.categoria, `
+    <div class="cartao">
+      <p style="margin:0 0 10px">
+        <span class="etiqueta ${entrada ? 'aberta' : ''}">
+          ${entrada ? 'Entrada' : 'Saída'}
+        </span>
+      </p>
+      <table class="simples">
+        ${linhas.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}
+      </table>
+      ${l.comprovante ? `
+        <p style="margin:14px 0 0">
+          <a class="btn pequeno" href="${endereco('comprovante', { arquivo: l.comprovante })}"
+             target="_blank" rel="noopener">Ver comprovante</a>
+        </p>` : ''}
+    </div>
+    <div class="acoes fim" style="margin-top:16px">
+      <button class="btn perigo" type="button" data-excluir>Excluir</button>
+      <button class="btn principal" type="button" data-editar>Editar</button>
+    </div>`);
+
+  const recarrega = () => abreAba(estado.aba);
+  elemento.querySelector('[data-editar]').onclick = () => {
+    fechar();
+    abreFormLancamento(l.tipo, l, recarrega);
+  };
+  elemento.querySelector('[data-excluir]').onclick = async () => {
+    if (!confirm('Excluir este lançamento? Não dá para desfazer.')) return;
+    await api('DELETE', 'lancamento', { id: l.id });
+    fechar();
+    recado('Lançamento excluído.');
+    await recarrega();
+  };
+}
+
+async function telaViagens(alvo) {
+  alvo.innerHTML = `
+    <div class="pilha">
+      <div class="titulo-secao">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
+          <div>
+            <h1>Controle de Viagens</h1>
+            <p>Gerenciamento completo das rotas, quilometragem, fretes e custos operacionais.</p>
+          </div>
+          <button class="btn principal" type="button" id="b-nova">${icone('adicionar')} Nova Viagem</button>
+        </div>
+      </div>
+      <div id="lista-viagens"><p class="carregando">Carregando viagens…</p></div>
+    </div>`;
+
+  const atualiza = async () => {
+    estado.viagensAbertas = await api('GET', 'viagens', { status: 'aberta', limite: 100 });
+    const caixa = document.getElementById('lista-viagens');
+    const viagens = await api('GET', 'viagens', { limite: 300 });
+    if (!viagens.length) {
+      caixa.innerHTML = `
+        <div class="vazio">
+          ${icone('caminhao')}
+          <p style="margin-top:8px">Nenhuma viagem registrada ainda. Abra a primeira viagem para monitorar a rota!</p>
+        </div>`;
+      return;
+    }
+
+    caixa.innerHTML = `
+      <div class="lista-viagens">
+        ${viagens.map((v) => {
+          const saldo = Number(v.entradas_centavos) - Number(v.saidas_centavos);
+          const aberta = v.status === 'aberta';
+          const km = v.km_final != null && v.km_inicial != null ? v.km_final - v.km_inicial : null;
+          return `
+          <div class="card-viagem ${aberta ? 'aberta' : ''}" data-viagem="${v.id}" role="button" tabindex="0">
+            <div class="cabecalho-viagem">
+              <div class="rota-viagem">
+                <span class="ponto">${esc(v.origem)}</span>
+                <span class="seta-rota">→</span>
+                <span class="ponto">${esc(v.destino)}</span>
+              </div>
+              <span class="badge-status ${aberta ? 'aberta' : 'encerrada'}">
+                ${aberta ? '● Em andamento' : '✓ Encerrada'}
+              </span>
+            </div>
+
+            <div class="meta-viagem">
+              <span>${dataCurta(v.inicio)}${v.fim ? ` até ${dataCurta(v.fim)}` : ''}</span>
+              ${v.placa ? `<span class="separador-ponto">·</span><span class="badge-placa">${esc(v.placa)}</span>` : ''}
+              ${ehAdmin() && v.motorista ? `<span class="separador-ponto">·</span><span>${esc(v.motorista)}</span>` : ''}
+              ${km != null ? `<span class="separador-ponto">·</span><span>${numero(km)} km rodados</span>` : ''}
+            </div>
+
+            <div class="metricas-viagem">
+              <div class="coluna-metrica">
+                <div class="rotulo">Despesas</div>
+                <div class="valor saida">${dinheiro(v.saidas_centavos)}</div>
+              </div>
+              ${ehAdmin() ? `
+              <div class="coluna-metrica">
+                <div class="rotulo">Frete Recebido</div>
+                <div class="valor entrada">${dinheiro(v.entradas_centavos)}</div>
+              </div>
+              <div class="coluna-metrica">
+                <div class="rotulo">Resultado</div>
+                <div class="valor ${saldo >= 0 ? 'entrada' : 'saida'}">
+                  ${saldo >= 0 ? '+' : '−'}${dinheiro(Math.abs(saldo))}
+                </div>
+              </div>` : `
+              <div class="coluna-metrica">
+                <div class="rotulo">Lançamentos</div>
+                <div class="valor" style="color:var(--tinta-2)">${v.qtd_lancamentos || 0}</div>
+              </div>`}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`;
+
+    caixa.querySelectorAll('[data-viagem]').forEach((b) => {
+      const v = viagens.find((x) => Number(x.id) === Number(b.dataset.viagem));
+      b.onclick = () => abreViagem(v, atualiza);
+      b.onkeydown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          abreViagem(v, atualiza);
+        }
+      };
+    });
+  };
+
+  alvo.querySelector('#b-nova').onclick = () => abreFormViagem(null, atualiza);
+  await atualiza();
+}
+
+function camposViagem(v = {}) {
+  return `
+    ${ehAdmin() ? `
+      <div class="campo">
+        <label for="v-motorista">Motorista</label>
+        <select id="v-motorista" name="usuario_id">
+          ${opcoesMotorista(v.usuario_id || estado.usuario.id)}
+        </select>
+      </div>` : ''}
+    <div class="linha duas">
+      <div class="campo">
+        <label for="v-origem">Saindo de</label>
+        <input id="v-origem" name="origem" required maxlength="80" placeholder="Cidade de saída"
+               value="${esc(v.origem || '')}">
+      </div>
+      <div class="campo">
+        <label for="v-destino">Indo para</label>
+        <input id="v-destino" name="destino" required maxlength="80" placeholder="Cidade de destino"
+               value="${esc(v.destino || '')}">
+      </div>
+    </div>
+    <div class="linha duas" style="margin-top:16px">
+      <div class="campo">
+        <label for="v-inicio">Dia da saída</label>
+        <input id="v-inicio" name="inicio" type="date" required value="${esc(v.inicio || hoje())}">
+      </div>
+      <div class="campo">
+        <label for="v-caminhao">Caminhão</label>
+        <select id="v-caminhao" name="caminhao_id">
+          ${opcoesCaminhao(v.caminhao_id, v.placa
+            ? { id: v.caminhao_id, placa: v.placa, apelido: v.caminhao_apelido } : null)}
+        </select>
+      </div>
+    </div>
+    <div class="campo opcional" style="margin-top:16px">
+      <label for="v-km">Km do painel na saída</label>
+      <input id="v-km" name="km_inicial" inputmode="numeric" value="${esc(v.km_inicial ?? '')}">
+    </div>
+    <div class="campo opcional">
+      <label for="v-obs">Observação</label>
+      <input id="v-obs" name="observacao" maxlength="500" value="${esc(v.observacao || '')}">
+    </div>`;
+}
+
+function abreFormViagem(viagem, aoConcluir) {
+  const { elemento, fechar } = janela(viagem ? 'Editar viagem' : 'Nova viagem', `
+    <form novalidate>
+      ${camposViagem(viagem || {})}
+      ${viagem ? `
+        <div class="linha duas">
+          <div class="campo opcional">
+            <label for="v-fim">Dia da chegada</label>
+            <input id="v-fim" name="fim" type="date" value="${esc(viagem.fim || '')}">
+          </div>
+          <div class="campo opcional">
+            <label for="v-kmf">Km na chegada</label>
+            <input id="v-kmf" name="km_final" inputmode="numeric" value="${esc(viagem.km_final ?? '')}">
+          </div>
+        </div>
+        <div class="campo">
+          <label for="v-status">Situação</label>
+          <select id="v-status" name="status">
+            <option value="aberta" ${viagem.status === 'aberta' ? 'selected' : ''}>Em andamento</option>
+            <option value="encerrada" ${viagem.status === 'encerrada' ? 'selected' : ''}>Encerrada</option>
+          </select>
+        </div>` : ''}
+      <div class="acoes fim">
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">${viagem ? 'Salvar alterações' : 'Abrir viagem'}</button>
+      </div>
+    </form>`);
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+  aoEnviar(form, async (dados) => {
+    if (!dados.origem?.trim() || !dados.destino?.trim()) {
+      throw new Error('Informe de onde está saindo e para onde vai.');
+    }
+    if (viagem) await api('PUT', 'viagem', { id: viagem.id }, dados);
+    else await api('POST', 'viagens', {}, dados);
+    fechar();
+    recado(viagem ? 'Viagem atualizada.' : 'Viagem aberta.');
+    await aoConcluir?.();
+  });
+}
+
+async function abreViagem(v, aoConcluir) {
+  const r = await api('GET', 'lancamentos', { viagem_id: v.id, limite: 300 });
+  const km = v.km_final != null && v.km_inicial != null ? v.km_final - v.km_inicial : null;
+  const saldo = Number(v.entradas_centavos) - Number(v.saidas_centavos);
+
+  const { elemento, fechar } = janela(`${v.origem} → ${v.destino}`, `
+    <div class="cartao">
+      <p style="margin:0 0 12px">
+        <span class="etiqueta ${v.status === 'aberta' ? 'aberta' : ''}">
+          ${v.status === 'aberta' ? 'Em andamento' : 'Encerrada'}
+        </span>
+      </p>
+      <div class="grade">
+        <div class="mini">
+          <div class="rotulo">Gastos da viagem</div>
+          <div class="numero saida">${dinheiro(v.saidas_centavos)}</div>
+          <small>${v.qtd_lancamentos} ${Number(v.qtd_lancamentos) === 1 ? 'lançamento' : 'lançamentos'}</small>
+        </div>
+        ${ehAdmin() ? `
+          <div class="mini">
+            <div class="rotulo">Frete recebido</div>
+            <div class="numero entrada">${dinheiro(v.entradas_centavos)}</div>
+          </div>
+          <div class="mini">
+            <div class="rotulo">Saldo da viagem</div>
+            <div class="numero ${saldo >= 0 ? 'entrada' : 'saida'}">
+              ${saldo >= 0 ? '' : '−'}${dinheiro(Math.abs(saldo))}
+            </div>
+          </div>` : ''}
+        <div class="mini">
+          <div class="rotulo">Período</div>
+          <div class="numero" style="font-size:1rem">
+            ${dataCurta(v.inicio)}${v.fim ? `<br>até ${dataCurta(v.fim)}` : ''}
+          </div>
+        </div>
+        ${km != null ? `
+          <div class="mini">
+            <div class="rotulo">Km rodados</div>
+            <div class="numero">${numero(km)}</div>
+          </div>` : ''}
+      </div>
+      <p style="color:var(--tinta-3);font-size:.9rem;margin:12px 0 0">
+        ${v.placa ? `Caminhão ${esc(v.placa)}` : 'Sem caminhão informado'}
+        ${ehAdmin() ? ` • Motorista ${esc(v.motorista)}` : ''}
+        ${v.observacao ? `<br>${esc(v.observacao)}` : ''}
+      </p>
+    </div>
+    ${r.qtd ? `
+      <div class="cartao" style="margin-top:14px">
+        <h2>Lançamentos desta viagem</h2>
+        <div class="lista">${r.itens.map(itemLancamento).join('')}</div>
+      </div>` : `
+      <div class="vazio" style="margin-top:14px">Nenhum lançamento nesta viagem ainda.</div>`}
+    <div class="acoes fim" style="margin-top:16px">
+      ${ehAdmin() ? '<button class="btn perigo" type="button" data-excluir>Excluir</button>' : ''}
+      <button class="btn" type="button" data-editar>Editar</button>
+      ${v.status === 'aberta' ? `
+        <button class="btn principal" type="button" data-encerrar>Encerrar viagem</button>` : ''}
+    </div>`);
+
+  ligaItens(elemento);
+  elemento.querySelector('[data-editar]').onclick = () => {
+    fechar();
+    abreFormViagem(v, aoConcluir);
+  };
+  elemento.querySelector('[data-encerrar]')?.addEventListener('click', () => {
+    fechar();
+    const j = janela('Encerrar viagem', `
+      <form novalidate>
+        <div class="campo">
+          <label for="e-fim">Dia da chegada</label>
+          <input id="e-fim" name="fim" type="date" required value="${hoje()}">
+        </div>
+        <div class="campo opcional">
+          <label for="e-km">Km do painel na chegada</label>
+          <input id="e-km" name="km_final" inputmode="numeric">
+        </div>
+        <div class="acoes fim">
+          <button class="btn" type="button" data-cancelar>Cancelar</button>
+          <button class="btn principal" type="submit">Encerrar</button>
+        </div>
+      </form>`);
+    const form = j.elemento.querySelector('form');
+    form.querySelector('[data-cancelar]').onclick = j.fechar;
+    aoEnviar(form, async (dados) => {
+      await api('POST', 'viagem-encerrar', { id: v.id }, dados);
+      j.fechar();
+      recado('Viagem encerrada.');
+      await aoConcluir?.();
+    });
+  });
+  elemento.querySelector('[data-excluir]')?.addEventListener('click', async () => {
+    if (!confirm('Excluir a viagem? Os lançamentos ficam salvos, mas sem viagem.')) return;
+    await api('DELETE', 'viagem', { id: v.id });
+    fechar();
+    recado('Viagem excluída.');
+    await aoConcluir?.();
+  });
+}
+
+function ajustaPainel(raiz) {
+  raiz.querySelectorAll('table.dados').forEach((tabela) => {
+    const titulos = [...tabela.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+    tabela.querySelectorAll('tbody tr').forEach((tr) => {
+      [...tr.children].forEach((td, i) => { if (titulos[i]) td.dataset.rotulo = titulos[i]; });
+    });
+  });
+  raiz.querySelectorAll('.grafico-meses').forEach((grafico) => {
+    grafico.parentElement.scrollLeft = grafico.parentElement.scrollWidth;
+  });
+}
+
+function desenhaGraficoPorModo(r, varios, de, ate, modo = 'linha') {
+  if (modo === 'pizza') {
+    return desenhaGraficoPizza(r);
+  } else if (modo === 'barras') {
+    return desenhaGraficoBarras(r, varios, de);
+  }
+  return desenhaGraficoLinha(r, varios, de);
+}
+
+function desenhaGraficoLinha(r, varios, de) {
+  const dados = varios ? r.meses : r.por_dia;
+  if (!dados || !dados.length) {
+    return '<div class="vazio"><p>Sem dados suficientes para desenhar a linha do tempo.</p></div>';
+  }
+
+  const w = 640;
+  const h = 220;
+  const padL = 60;
+  const padR = 25;
+  const padT = 30;
+  const padB = 40;
+  const chartW = w - padL - padR;
+  const chartH = h - padT - padB;
+
+  let pontosE = [];
+  let pontosS = [];
+  let labels = [];
+
+  if (varios) {
+    const maior = Math.max(1, ...r.meses.flatMap((m) => [Number(m.entradas_centavos), Number(m.saidas_centavos)]));
+    const n = r.meses.length;
+    r.meses.forEach((m, i) => {
+      const x = n === 1 ? padL + chartW / 2 : padL + (i / (n - 1)) * chartW;
+      const yE = padT + chartH - (Number(m.entradas_centavos) / maior) * chartH;
+      const yS = padT + chartH - (Number(m.saidas_centavos) / maior) * chartH;
+      pontosE.push({ x, y: yE, val: m.entradas_centavos, rotulo: mesCurto(m.mes) });
+      pontosS.push({ x, y: yS, val: m.saidas_centavos, rotulo: mesCurto(m.mes) });
+      labels.push({ x, rotulo: mesCurto(m.mes) });
+    });
+  } else {
+    const [ano, m] = de.split('-').map(Number);
+    const dias = new Date(Date.UTC(ano, m, 0)).getUTCDate();
+    const mapa = new Map(r.por_dia.map((d) => [Number(String(d.data).slice(8, 10)), Number(d.saidas_centavos)]));
+    const maior = Math.max(1, ...mapa.values(), r.atual.entradas_centavos > 0 ? r.atual.entradas_centavos / dias : 0);
+    
+    for (let d = 1; d <= dias; d++) {
+      const x = padL + ((d - 1) / (dias - 1)) * chartW;
+      const valS = mapa.get(d) || 0;
+      const yS = padT + chartH - (valS / maior) * chartH;
+      pontosS.push({ x, y: yS, val: valS, rotulo: `Dia ${d}` });
+      if (d === 1 || d === Math.round(dias / 2) || d === dias) {
+        labels.push({ x, rotulo: `Dia ${d}` });
+      }
+    }
+  }
+
+  const dLinha = (pts) => pts.length ? pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ') : '';
+  const dArea = (pts) => {
+    if (!pts.length) return '';
+    const base = padT + chartH;
+    return `${dLinha(pts)} L ${pts[pts.length - 1].x.toFixed(1)} ${base} L ${pts[0].x.toFixed(1)} ${base} Z`;
+  };
+
+  return `
+    <div class="area-desenho-grafico">
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:16px;margin-bottom:8px;font-size:0.78rem;font-weight:700">
+        ${varios ? `<span style="color:#10b981;display:flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:50%;background:#10b981;display:inline-block"></i> Fretes (Receitas)</span>` : ''}
+        <span style="color:#f43f5e;display:flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:50%;background:#f43f5e;display:inline-block"></i> Gastos (Custos)</span>
+      </div>
+      <svg viewBox="0 0 ${w} ${h}">
+        <defs>
+          <linearGradient id="grad-frete" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#10b981" stop-opacity="0.35"/>
+            <stop offset="100%" stop-color="#10b981" stop-opacity="0.0"/>
+          </linearGradient>
+          <linearGradient id="grad-gasto" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#f43f5e" stop-opacity="0.3"/>
+            <stop offset="100%" stop-color="#f43f5e" stop-opacity="0.0"/>
+          </linearGradient>
+        </defs>
+
+        <!-- Grid Lines -->
+        <line x1="${padL}" y1="${padT}" x2="${w - padR}" y2="${padT}" stroke="#e2e8f0" stroke-dasharray="3 3"/>
+        <line x1="${padL}" y1="${padT + chartH * 0.5}" x2="${w - padR}" y2="${padT + chartH * 0.5}" stroke="#e2e8f0" stroke-dasharray="3 3"/>
+        <line x1="${padL}" y1="${padT + chartH}" x2="${w - padR}" y2="${padT + chartH}" stroke="#cbd5e1" stroke-width="1.5"/>
+
+        ${pontosE.length ? `
+          <path d="${dArea(pontosE)}" fill="url(#grad-frete)"/>
+          <path d="${dLinha(pontosE)}" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round"/>
+          ${pontosE.map((p) => `
+            <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.5" fill="#ffffff" stroke="#10b981" stroke-width="2.5">
+              <title>${esc(p.rotulo)}: Receita ${dinheiro(p.val)}</title>
+            </circle>`).join('')}
+        ` : ''}
+
+        ${pontosS.length ? `
+          <path d="${dArea(pontosS)}" fill="url(#grad-gasto)"/>
+          <path d="${dLinha(pontosS)}" fill="none" stroke="#f43f5e" stroke-width="2.5" stroke-linecap="round"/>
+          ${pontosS.map((p) => `
+            <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.5" fill="#ffffff" stroke="#f43f5e" stroke-width="2.5">
+              <title>${esc(p.rotulo)}: Custo ${dinheiro(p.val)}</title>
+            </circle>`).join('')}
+        ` : ''}
+
+        <!-- X Axis Labels -->
+        ${labels.map((l) => `
+          <text x="${l.x.toFixed(1)}" y="${h - 10}" font-size="11" font-weight="600" fill="#64748b" text-anchor="middle">
+            ${esc(l.rotulo)}
+          </text>`).join('')}
+      </svg>
+    </div>`;
+}
+
+function desenhaGraficoBarras(r, varios, de) {
+  if (varios) {
+    const meses = r.meses;
+    const maior = Math.max(1, ...meses.flatMap((m) => [Number(m.entradas_centavos), Number(m.saidas_centavos)]));
+    return `
+      <div class="area-desenho-grafico">
+        <div style="display:flex;align-items:flex-end;justify-content:space-around;gap:14px;min-height:190px;padding:16px 0 10px 0;width:100%">
+          ${meses.map((m) => {
+            const saldo = Number(m.saldo_centavos);
+            const altE = Math.max(Number(m.entradas_centavos) / maior * 120, m.entradas_centavos > 0 ? 6 : 2);
+            const altS = Math.max(Number(m.saidas_centavos) / maior * 120, m.saidas_centavos > 0 ? 6 : 2);
+            return `
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1;min-width:50px">
+              <div style="display:flex;align-items:flex-end;gap:5px;height:120px">
+                <div style="width:14px;height:${altE}px;background:#10b981;border-radius:4px 4px 0 0"
+                     title="${mesCurto(m.mes)} - Receitas: ${dinheiro(m.entradas_centavos)}"></div>
+                <div style="width:14px;height:${altS}px;background:#f43f5e;border-radius:4px 4px 0 0"
+                     title="${mesCurto(m.mes)} - Gastos: ${dinheiro(m.saidas_centavos)}"></div>
+              </div>
+              <span class="badge-status ${saldo >= 0 ? 'aberta' : 'encerrada'}" style="font-size:0.7rem;padding:2px 6px">
+                ${saldo >= 0 ? '+' : '−'}${dinheiroCurto(saldo)}
+              </span>
+              <span style="font-size:0.75rem;font-weight:700;color:var(--tinta-2)">${mesCurto(m.mes)}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }
+
+  // Single month day bars
+  const [ano, m] = de.split('-').map(Number);
+  const dias = new Date(Date.UTC(ano, m, 0)).getUTCDate();
+  const mapa = new Map(r.por_dia.map((d) => [Number(String(d.data).slice(8, 10)), Number(d.saidas_centavos)]));
+  const maior = Math.max(1, ...mapa.values());
+  let barrasHtml = '';
+
+  for (let dia = 1; dia <= dias; dia++) {
+    const val = mapa.get(dia) || 0;
+    const altura = val ? Math.max((val / maior) * 110, 4) : 2;
+    barrasHtml += `
+      <div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:14px"
+           title="Dia ${dia}: ${val ? dinheiro(val) : 'sem gastos'}">
+        <div style="width:8px;height:${altura}px;background:${val ? '#f43f5e' : '#e2e8f0'};border-radius:3px 3px 0 0"></div>
+        <span style="font-size:0.65rem;color:var(--tinta-3);margin-top:4px">${dia % 5 === 0 || dia === 1 ? dia : ''}</span>
+      </div>`;
+  }
+
+  return `
+    <div class="area-desenho-grafico">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;height:140px;padding-top:14px">
+        ${barrasHtml}
+      </div>
+    </div>`;
+}
+
+function desenhaGraficoPizza(r) {
+  const cats = r.saidas_por_categoria || [];
+  const total = Number(r.atual.saidas_centavos) || 0;
+
+  if (!cats.length || total <= 0) {
+    return `
+      <div class="vazio" style="padding:32px 16px">
+        ${icone('pizzaGrafico')}
+        <p style="margin-top:8px">Nenhum gasto categorizado no período para exibir o gráfico de pizza.</p>
+      </div>`;
+  }
+
+  const CORES = ['#4338ca', '#0284c7', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#06b6d4', '#ec4899', '#64748b'];
+  let anguloAtual = 0;
+  const cx = 110;
+  const cy = 110;
+  const rExt = 82;
+  const rInt = 50;
+
+  const fatiasSvg = cats.map((c, i) => {
+    const val = Number(c.total_centavos) || 0;
+    const pct = val / total;
+    const sweep = pct * 360;
+    const startAng = anguloAtual;
+    const endAng = anguloAtual + sweep;
+    anguloAtual = endAng;
+
+    const toRad = (graus) => (graus - 90) * (Math.PI / 180);
+    const x1 = cx + rExt * Math.cos(toRad(startAng));
+    const y1 = cy + rExt * Math.sin(toRad(startAng));
+    const x2 = cx + rExt * Math.cos(toRad(endAng));
+    const y2 = cy + rExt * Math.sin(toRad(endAng));
+    const x3 = cx + rInt * Math.cos(toRad(endAng));
+    const y3 = cy + rInt * Math.sin(toRad(endAng));
+    const x4 = cx + rInt * Math.cos(toRad(startAng));
+    const y4 = cy + rInt * Math.sin(toRad(startAng));
+    const largeArc = sweep > 180 ? 1 : 0;
+    const cor = CORES[i % CORES.length];
+
+    const d = `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${rExt} ${rExt} 0 ${largeArc} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} L ${x3.toFixed(2)} ${y3.toFixed(2)} A ${rInt} ${rInt} 0 ${largeArc} 0 ${x4.toFixed(2)} ${y4.toFixed(2)} Z`;
+
+    return `
+      <path d="${d}" fill="${cor}">
+        <title>${esc(c.nome)}: ${dinheiro(val)} (${(pct * 100).toFixed(1)}%)</title>
+      </path>`;
+  }).join('');
+
+  return `
+    <div class="layout-pizza">
+      <div class="donut-svg-caixa">
+        <svg viewBox="0 0 220 220" width="220" height="220" style="min-width:0">
+          ${fatiasSvg}
+          <text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="11" font-weight="700" fill="#94a3b8">TOTAL GASTOS</text>
+          <text x="${cx}" y="${cy + 16}" text-anchor="middle" font-size="14" font-weight="800" fill="#0f172a">${dinheiroCurto(total)}</text>
+        </svg>
+      </div>
+
+      <div class="tabela-pizza-legenda">
+        ${cats.map((c, i) => {
+          const val = Number(c.total_centavos) || 0;
+          const pct = Math.round((val / total) * 100);
+          const cor = CORES[i % CORES.length];
+          return `
+          <div class="item-pizza-legenda">
+            <div style="display:flex;align-items:center">
+              <span class="ponto-cor" style="background:${cor}"></span>
+              <span class="nome">${esc(c.nome)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:0.75rem;font-weight:700;color:var(--tinta-3)">${pct}%</span>
+              <span class="valor">${dinheiro(val)}</span>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+function somaMeses(mes, n) {
+  const [a, m] = mes.split('-').map(Number);
+  const d = new Date(Date.UTC(a, m - 1 + n, 1));
+  return d.toISOString().slice(0, 7);
+}
+
+function periodoLongo(de, ate) {
+  return de === ate ? mesLongo(de) : `${mesLongo(de)} até ${mesLongo(ate)}`;
+}
+
+function atalhosPeriodo() {
+  const atual = hoje().slice(0, 7);
+  return [
+    { nome: 'Este mês', de: atual, ate: atual },
+    { nome: 'Mês passado', de: somaMeses(atual, -1), ate: somaMeses(atual, -1) },
+    { nome: 'Últimos 3 meses', de: somaMeses(atual, -2), ate: atual },
+    { nome: 'Últimos 6 meses', de: somaMeses(atual, -5), ate: atual },
+    { nome: 'Últimos 12 meses', de: somaMeses(atual, -11), ate: atual },
+    { nome: 'Este ano', de: `${atual.slice(0, 4)}-01`, ate: atual },
+  ];
+}
+
+function tabelaCaminhoes(lista) {
+  return `
+    <div class="tabela-rolagem">
+      <table class="dados">
+        <thead>
+          <tr>
+            <th>Caminhão</th><th>Entradas</th><th>Saídas</th><th>Saldo</th>
+            <th>Combustível</th><th>Litros</th><th>R$/litro</th><th>Km</th><th>Km/litro</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${lista.length ? lista.map((c) => {
+            const litros = Number(c.litros);
+            const km = Number(c.km_rodados);
+            const precoLitro = litros > 0 ? Number(c.combustivel_centavos) / litros : null;
+            return `
+            <tr>
+              <td><span class="badge-placa">${esc(c.placa)}</span>${c.apelido ? `<br><small style="color:var(--tinta-3)">${esc(c.apelido)}</small>` : ''}</td>
+              <td>${dinheiro(c.entradas_centavos)}</td>
+              <td>${dinheiro(c.saidas_centavos)}</td>
+              <td class="${c.saldo_centavos >= 0 ? 'positivo' : 'negativo'}">
+                ${c.saldo_centavos >= 0 ? '+' : '−'}${dinheiro(Math.abs(c.saldo_centavos))}
+              </td>
+              <td>${dinheiro(c.combustivel_centavos)}</td>
+              <td>${litros ? numero(litros) : '—'}</td>
+              <td>${precoLitro ? dinheiro(precoLitro) : '—'}</td>
+              <td>${km ? numero(km) : '—'}</td>
+              <td>${km && litros ? numero(km / litros) : '—'}</td>
+            </tr>`;
+          }).join('') : '<tr><td colspan="9">Sem lançamentos neste período.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+    <p class="ajuda" style="margin:12px 0 0">
+      Km e km/litro só aparecem quando as viagens têm o km de saída e de chegada preenchidos.
+    </p>`;
+}
+
+function barras(itens, rotulo = (i) => esc(i.nome), tipo = 'saida') {
+  if (!itens || !itens.length) {
+    return `<div class="vazio" style="padding:16px 8px;font-size:0.875rem">Nenhum lançamento registrado neste período.</div>`;
+  }
+  const max = Math.max(...itens.map((i) => Number(i.total_centavos) || 0), 1);
+  return `
+    <div class="barras ${tipo}">
+      ${itens.map((i) => {
+        const val = Number(i.total_centavos) || 0;
+        const pct = Math.max(3, Math.round((val / max) * 100));
+        return `
+        <div class="linha-barra">
+          <div class="rotulo-barra">
+            <span>${rotulo(i)} ${i.qtd ? `<span class="qtd">(${i.qtd}x)</span>` : ''}</span>
+            <b>${dinheiro(val)}</b>
+          </div>
+          <div class="trilha">
+            <div class="preenche" style="width:${pct}%"></div>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+async function telaPanorama(alvo) {
+  const atual = hoje().slice(0, 7);
+  const periodo = { de: atual, ate: atual };
+
+  alvo.innerHTML = `
+    <div class="pilha">
+      <div class="titulo-secao">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
+          <div>
+            <h1>Panorama Financeiro & Operacional</h1>
+            <p id="p-periodo"></p>
+          </div>
+          <div class="acoes" style="margin:0">
+            <button class="btn pequeno" type="button" id="p-csv">${icone('download')} Exportar CSV</button>
+            <a class="btn pequeno" id="p-pdf" href="#" target="_blank">${icone('pdf')} Relatório PDF</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="cartao painel-filtro-panorama-cartao">
+        <div class="grade-filtro-panorama-limpo">
+          <div class="campo campo-mes-de">
+            <label for="p-de">Mês inicial</label>
+            <input id="p-de" type="month" value="${periodo.de}">
+          </div>
+          <div class="campo campo-mes-ate">
+            <label for="p-ate">Mês final</label>
+            <input id="p-ate" type="month" value="${periodo.ate}">
+          </div>
+          <div class="campo acao-filtro-atalhos">
+            <label class="rotulo-invisivel-alinhamento">&nbsp;</label>
+            <button class="btn-icone-filtro-panorama" type="button" id="p-btn-atalhos" title="Atalhos rápidos de período">
+              ${icone('filtro')} <span>Atalhos</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="painel"><p class="carregando">Carregando indicadores da frota…</p></div>
+    </div>`;
+
+  const campoDe = alvo.querySelector('#p-de');
+  const campoAte = alvo.querySelector('#p-ate');
+
+  const atualiza = async () => {
+    if (periodo.de > periodo.ate) [periodo.de, periodo.ate] = [periodo.ate, periodo.de];
+    campoDe.value = periodo.de;
+    campoAte.value = periodo.ate;
+
+    const painel = document.getElementById('painel');
+    painel.innerHTML = '<p class="carregando">Carregando indicadores da frota…</p>';
+    const { de, ate } = periodo;
+    const varios = de !== ate;
+    document.getElementById('p-periodo').textContent = periodoLongo(de, ate);
+    document.getElementById('p-pdf').href = endereco('pdf-panorama', { de, ate });
+
+    let r;
+    try {
+      r = await api('GET', 'resumo', { de, ate });
+    } catch (erro) {
+      painel.innerHTML = `<div class="aviso erro">${esc(erro.message)}</div>`;
+      return;
+    }
+    if (periodo.de !== de || periodo.ate !== ate) return;
+
+    alvo.querySelector('#p-csv').onclick = () => {
+      if (r && r.por_caminhao && r.por_caminhao.length) {
+        exportarCSV(r.por_caminhao, `panorama-caminhoes-${de}-${ate}.csv`);
+      } else if (r && r.meses && r.meses.length) {
+        exportarCSV(r.meses, `panorama-meses-${de}-${ate}.csv`);
+      } else {
+        recado('Sem dados para exportar neste período.');
+      }
+    };
+
+    const saldo = r.atual.saldo_centavos;
+    const saldoAnterior = r.anterior.saldo_centavos;
+    const diferenca = saldo - saldoAnterior;
+    const periodoAnterior = periodoLongo(r.anterior_de, r.anterior_ate);
+    const precoLitro = r.litros > 0 ? r.combustivel_centavos / r.litros : null;
+    const comMovimento = r.meses.filter((m) => m.qtd > 0).length || 1;
+    const margemLucro = r.atual.entradas_centavos > 0
+      ? Math.round((saldo / r.atual.entradas_centavos) * 100)
+      : null;
+
+    const comparacaoTexto = r.anterior.qtd
+      ? `${diferenca >= 0 ? '▲' : '▼'} <strong>${dinheiro(Math.abs(diferenca))}</strong> ${diferenca >= 0 ? 'superior' : 'inferior'} ao período anterior (${periodoAnterior})`
+      : `Sem movimentações em ${periodoAnterior} para comparação direta.`;
+
+    const pctCombustivel = r.atual.saidas_centavos > 0
+      ? Math.round((r.combustivel_centavos / r.atual.saidas_centavos) * 100)
+      : 0;
+
+    painel.innerHTML = `
+      <div class="pilha">
+        <!-- Card Hero de Destaque Escuro (Estilo SaaS Executivo) -->
+        <div class="card-hero-destaque">
+          <div class="cabecalho-hero">
+            <span class="subtitulo-hero">Resultado Líquido Operacional</span>
+            ${margemLucro !== null ? `
+              <span class="tag-hero ${margemLucro >= 0 ? 'positivo' : 'negativo'}">
+                Margem: ${margemLucro}%
+              </span>` : ''}
+          </div>
+
+          <div class="valor-hero ${saldo >= 0 ? 'positivo' : 'negativo'}">
+            ${saldo >= 0 ? '' : '−'}${dinheiro(Math.abs(saldo))}
+          </div>
+
+          <div class="variacao-hero">
+            ${comparacaoTexto}
+          </div>
+
+          <div class="mini-grid-hero">
+            <div class="item-mini-hero">
+              <span class="rotulo">Receita Bruta (Fretes)</span>
+              <span class="valor" style="color:#34d399">${dinheiro(r.atual.entradas_centavos)}</span>
+            </div>
+            <div class="item-mini-hero">
+              <span class="rotulo">Custos & Gastos Totais</span>
+              <span class="valor" style="color:#fb7185">${dinheiro(r.atual.saidas_centavos)}</span>
+            </div>
+            <div class="item-mini-hero">
+              <span class="rotulo">Total de Lançamentos</span>
+              <span class="valor" style="color:#93c5fd">${r.atual.qtd}</span>
+            </div>
+            ${varios ? `
+            <div class="item-mini-hero">
+              <span class="rotulo">Média Mensal</span>
+              <span class="valor">${dinheiro(Math.round(saldo / comMovimento))}</span>
+            </div>` : ''}
+          </div>
+        </div>
+
+        <!-- Grade de KPIs Secundários -->
+        <div class="grade-kpis">
+          <div class="card-kpi">
+            <div class="icone-kpi verde">${icone('receber')}</div>
+            <div class="corpo-kpi">
+              <span class="rotulo">Frete Faturado</span>
+              <span class="valor entrada">${dinheiro(r.atual.entradas_centavos)}</span>
+              <span class="subtexto">${r.viagens_abertas} ${r.viagens_abertas === 1 ? 'viagem em rota' : 'viagens em rota'}</span>
+            </div>
+          </div>
+
+          <div class="card-kpi">
+            <div class="icone-kpi vermelho">${icone('gasto')}</div>
+            <div class="corpo-kpi">
+              <span class="rotulo">Gastos Operacionais</span>
+              <span class="valor saida">${dinheiro(r.atual.saidas_centavos)}</span>
+              <span class="subtexto">${r.atual.qtd} despesas registradas</span>
+            </div>
+          </div>
+
+          <div class="card-kpi">
+            <div class="icone-kpi amarelo">${icone('combustivel')}</div>
+            <div class="corpo-kpi">
+              <span class="rotulo">Combustível (Diesel)</span>
+              <span class="valor">${dinheiro(r.combustivel_centavos)}</span>
+              <span class="subtexto">${pctCombustivel}% das despesas totais</span>
+            </div>
+          </div>
+
+          <div class="card-kpi">
+            <div class="icone-kpi azul">${icone('caminhao')}</div>
+            <div class="corpo-kpi">
+              <span class="rotulo">Volume Abastecido</span>
+              <span class="valor">${numero(r.litros)} L</span>
+              <span class="subtexto">${precoLitro ? `${dinheiro(precoLitro)} por litro` : 'Sem abastecimentos'}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Bloco de Gráficos com Alternador (Linha, Barras, Pizza) -->
+        <div class="cartao painel-grafico" id="bloco-grafico-panorama">
+          <div class="topo-grafico">
+            <div>
+              <h2 style="margin:0 0 4px">Evolução & Distribuição Financeira</h2>
+              <p class="ajuda" style="margin:0 0 4px">Alterne entre visualização de Linha, Barras ou Distribuição em Pizza.</p>
+            </div>
+            <div class="seletor-grafico" role="group" aria-label="Visualização do gráfico">
+              <button type="button" data-modo-grafico="linha" aria-pressed="${estado.modoGrafico === 'linha'}">
+                ${icone('linhaGrafico')} Linha
+              </button>
+              <button type="button" data-modo-grafico="barras" aria-pressed="${estado.modoGrafico === 'barras'}">
+                ${icone('barrasGrafico')} Barras
+              </button>
+              <button type="button" data-modo-grafico="pizza" aria-pressed="${estado.modoGrafico === 'pizza'}">
+                ${icone('pizzaGrafico')} Pizza
+              </button>
+            </div>
+          </div>
+          <div id="conteudo-grafico-ativo">
+            ${desenhaGraficoPorModo(r, varios, de, ate, estado.modoGrafico)}
+          </div>
+        </div>
+
+        ${varios ? `
+          <div class="cartao">
+            <h2 style="margin:0 0 4px">Detalhamento Mensal em Números</h2>
+            <div class="tabela-rolagem" style="margin-top:12px">
+              <table class="dados">
+                <thead>
+                  <tr><th>Mês</th><th>Receitas</th><th>Despesas</th><th>Saldo Líquido</th><th>Margem</th><th>Lanç.</th></tr>
+                </thead>
+                <tbody>
+                  ${[...r.meses].reverse().map((m) => {
+                    const mSaldo = Number(m.saldo_centavos);
+                    const mMargem = Number(m.entradas_centavos) > 0 ? Math.round((mSaldo / Number(m.entradas_centavos)) * 100) : null;
+                    return `
+                    <tr${m.qtd ? '' : ' class="sem-movimento"'}>
+                      <td><strong>${mesCurto(m.mes)}</strong></td>
+                      <td>${dinheiro(m.entradas_centavos)}</td>
+                      <td>${dinheiro(m.saidas_centavos)}</td>
+                      <td class="${mSaldo >= 0 ? 'positivo' : 'negativo'}">
+                        <strong>${mSaldo >= 0 ? '+' : '−'}${dinheiro(Math.abs(mSaldo))}</strong>
+                      </td>
+                      <td>${mMargem !== null ? `${mMargem}%` : '—'}</td>
+                      <td>${m.qtd}</td>
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>` : ''}
+
+        <div class="cartao">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+            <h2 style="margin:0">Performance por Caminhão</h2>
+            <span class="badge-status encerrada">${r.por_caminhao.length} veículos avaliados</span>
+          </div>
+          ${tabelaCaminhoes(r.por_caminhao)}
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:16px">
+          <div class="cartao">
+            <h2 style="margin:0 0 12px">Saídas por Categoria</h2>
+            ${barras(r.saidas_por_categoria, (i) => esc(i.nome))}
+          </div>
+
+          <div class="cartao">
+            <h2 style="margin:0 0 12px">Entradas por Frete</h2>
+            ${barras(r.entradas_por_categoria, (i) => esc(i.nome), 'entrada')}
+          </div>
+        </div>
+
+        <div class="cartao">
+          <h2 style="margin:0 0 12px">Gastos por Motorista</h2>
+          ${barras(r.por_motorista, (i) => esc(i.nome))}
+        </div>
+      </div>`;
+
+    // Connect Chart Switcher Buttons (Linha, Barras, Pizza)
+    painel.querySelectorAll('[data-modo-grafico]').forEach((btn) => {
+      btn.onclick = () => {
+        estado.modoGrafico = btn.dataset.modoGrafico;
+        painel.querySelectorAll('[data-modo-grafico]').forEach((b) => {
+          b.setAttribute('aria-pressed', String(b === btn));
+        });
+        const container = painel.querySelector('#conteudo-grafico-ativo');
+        if (container) {
+          container.innerHTML = desenhaGraficoPorModo(r, varios, de, ate, estado.modoGrafico);
+        }
+      };
+    });
+  };
+
+  campoDe.onchange = () => {
+    periodo.de = campoDe.value || atual;
+    atualiza();
+  };
+  campoAte.onchange = () => {
+    periodo.ate = campoAte.value || atual;
+    atualiza();
+  };
+  const bAtalhos = alvo.querySelector('#p-btn-atalhos');
+  if (bAtalhos) {
+    bAtalhos.onclick = () => {
+      const atalhos = atalhosPeriodo();
+      const { elemento, fechar } = janela('Atalhos de Período', `
+        <div class="pilha">
+          <p class="ajuda" style="margin-top:0">Selecione um período rápido para preencher o mês inicial e final:</p>
+          <div class="lista-atalhos-periodo">
+            ${atalhos.map((a, i) => {
+              const ativo = a.de === periodo.de && a.ate === periodo.ate;
+              return `
+                <button type="button" class="item-atalho-periodo ${ativo ? 'ativo' : ''}" data-idx-atalho="${i}">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span class="ponto-atalho ${ativo ? 'ativo' : ''}"></span>
+                    <strong>${esc(a.nome)}</strong>
+                  </div>
+                  <small style="color:var(--tinta-3)">${mesCurto(a.de)}${a.de !== a.ate ? ` → ${mesCurto(a.ate)}` : ''}</small>
+                </button>`;
+            }).join('')}
+          </div>
+        </div>`);
+
+      elemento.querySelectorAll('[data-idx-atalho]').forEach((btn) => {
+        btn.onclick = () => {
+          const a = atalhos[Number(btn.dataset.idxAtalho)];
+          periodo.de = a.de;
+          periodo.ate = a.ate;
+          fechar();
+          atualiza();
+        };
+      });
+    };
+  }
+  await atualiza();
+}
+
+async function excluiUsuario(u, aoConcluir) {
+  if (u.papel === 'admin') {
+    recado('Usuários administradores não podem ser removidos.');
+    return;
+  }
+  if (u.id === estado.usuario?.id) {
+    recado('Você não pode remover seu próprio usuário.');
+    return;
+  }
+  if (!confirm(`Deseja realmente remover o motorista "${u.nome}" (@${u.usuario})?\n\nEsta ação excluirá o cadastro de acesso do motorista.`)) {
+    return;
+  }
+  try {
+    await api('DELETE', 'usuario', { id: u.id });
+    recado(`Motorista "${u.nome}" removido.`);
+    await aoConcluir?.();
+  } catch (erro) {
+    recado(erro.message);
+  }
+}
+
+async function excluiCaminhao(c, aoConcluir) {
+  if (!confirm(`Deseja realmente remover o caminhão com placa "${c.placa}"${c.apelido ? ` (${c.apelido})` : ''}?\n\nEsta ação não poderá ser desfeita.`)) {
+    return;
+  }
+  try {
+    await api('DELETE', 'caminhao', { id: c.id });
+    recado(`Caminhão "${c.placa}" removido.`);
+    await aoConcluir?.();
+  } catch (erro) {
+    recado(erro.message);
+  }
+}
+
+async function telaAjustes(alvo) {
+  const admin = ehAdmin();
+  alvo.innerHTML = `
+    <div class="pilha">
+      <div class="titulo-secao">
+        <div>
+          <h1>${admin ? 'Ajustes & Gestão da Frota' : 'Meu Perfil & Acesso'}</h1>
+          <p>${esc(estado.usuario.nome)} — <strong style="color:var(--primaria)">${admin ? 'Proprietário' : 'Motorista'}</strong></p>
+        </div>
+      </div>
+
+      ${admin ? `
+        <!-- Motoristas e Acessos -->
+        <div class="cartao" id="secao-usuarios">
+          <div class="secao-card-topo">
+            <div>
+              <h2>Motoristas e Acessos</h2>
+              <p class="ajuda" style="margin:2px 0 0">Cadastre e gerencie motoristas com acesso ao sistema.</p>
+            </div>
+            <button class="btn principal pequeno" type="button" id="b-usuario">
+              ${icone('adicionar')} Novo Motorista
+            </button>
+          </div>
+          <div class="lista-ajustes-entidades" id="lista-usuarios">
+            <p class="carregando">Carregando motoristas…</p>
+          </div>
+        </div>
+
+        <!-- Caminhões da Frota -->
+        <div class="cartao" id="secao-caminhoes">
+          <div class="secao-card-topo">
+            <div>
+              <h2>Caminhões da Frota</h2>
+              <p class="ajuda" style="margin:2px 0 0">Veículos cadastrados para controle de fretes, gastos e médias.</p>
+            </div>
+            <button class="btn principal pequeno" type="button" id="b-caminhao">
+              ${icone('adicionar')} Novo Caminhão
+            </button>
+          </div>
+          <div class="lista-ajustes-entidades" id="lista-caminhoes">
+            <p class="carregando">Carregando caminhões…</p>
+          </div>
+        </div>
+
+        <!-- Categorias Financeiras -->
+        <div class="cartao" id="secao-categorias">
+          <div class="secao-card-topo">
+            <div>
+              <h2>Categorias Financeiras</h2>
+              <p class="ajuda" style="margin:2px 0 0">Organize os tipos de despesas operacionais e fontes de receita.</p>
+            </div>
+            <button class="btn principal pequeno" type="button" id="b-categoria">
+              ${icone('adicionar')} Nova Categoria
+            </button>
+          </div>
+
+          <button type="button" class="btn-acordeon-categorias" id="b-toggle-categorias" aria-expanded="false">
+            <div class="info-acordeon">
+              <span class="icone-acordeon">${icone('lista')}</span>
+              <span id="rotulo-acordeon-categorias">Categorias cadastradas</span>
+            </div>
+            <div class="seta-acordeon">
+              <span class="texto-acao-acordeon" id="texto-estado-acordeon">Expandir</span>
+              <span class="chevron-acordeon" id="icone-chevron-acordeon">▾</span>
+            </div>
+          </button>
+
+          <div class="corpo-acordeon-categorias oculto" id="conteudo-acordeon-categorias" style="margin-top:14px">
+            <div class="filtro-pills-ajustes" role="group" aria-label="Filtrar categorias" id="filtro-categorias-ajustes">
+              <button type="button" data-filtro-cat="todos" aria-pressed="true">Todas</button>
+              <button type="button" data-filtro-cat="saida" aria-pressed="false">Gastos / Despesas</button>
+              <button type="button" data-filtro-cat="entrada" aria-pressed="false">Entradas / Fretes</button>
+            </div>
+
+            <div id="lista-categorias">
+              <p class="carregando">Carregando categorias…</p>
+            </div>
+          </div>
+        </div>` : ''}
+
+      <!-- Alterar Senha -->
+      <form class="cartao" novalidate id="form-alterar-senha">
+        <h2>Segurança & Senha de Acesso</h2>
+        <p class="ajuda">Mantenha sua conta protegida com uma senha segura e fácil de lembrar.</p>
+        <div class="linha duas">
+          <div class="campo">
+            <label for="s-atual">Senha atual</label>
+            <input id="s-atual" name="senha_atual" type="password" required autocomplete="current-password" placeholder="Digite sua senha atual">
+          </div>
+          <div class="campo">
+            <label for="s-nova">Nova senha</label>
+            <input id="s-nova" name="senha_nova" type="password" required autocomplete="new-password" placeholder="Digite a nova senha">
+          </div>
+        </div>
+        <div class="acoes" style="margin-top:14px">
+          <button class="btn principal" type="submit">${icone('check')} Atualizar Minha Senha</button>
+        </div>
+      </form>
+
+      <div class="cartao">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="font-size:1.5rem">📱</div>
+          <div>
+            <h2 style="margin:0 0 2px">Instalar Aplicativo no Celular</h2>
+            <p class="ajuda" style="margin:0">
+              No navegador do seu smartphone, acesse o menu e toque em
+              <b>“Adicionar à tela de início”</b> para usá-lo como um aplicativo completo.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end">
+        <button class="btn perigo grande" type="button" id="b-sair">
+          ${icone('fechar')} Encerrar Sessão e Sair
+        </button>
+      </div>
+    </div>`;
+
+  const formSenha = alvo.querySelector('#form-alterar-senha');
+  if (formSenha) {
+    aoEnviar(formSenha, async (dados) => {
+      await api('POST', 'trocar-senha', {}, dados);
+      formSenha.reset();
+      recado('Senha atualizada com sucesso.');
+    });
+  }
+
+  alvo.querySelector('#b-sair').onclick = async () => {
+    try { await api('POST', 'logout'); } catch {}
+    localStorage.removeItem('frota_token');
+    estado.usuario = null;
+    estado.aba = null;
+    telaLogin('Você saiu da conta.');
+  };
+
+  if (!admin) return;
+
+  let filtroCategoriaAtivo = 'todos';
+
+  const atualiza = async () => {
+    const [usuarios, caminhoes, categorias] = await Promise.all([
+      api('GET', 'usuarios'),
+      api('GET', 'caminhoes', { todos: 1 }),
+      api('GET', 'categorias', { todos: 1 }),
+    ]);
+    estado.usuarios = usuarios;
+    estado.caminhoes = caminhoes.filter((c) => Number(c.ativo));
+    estado.categorias = categorias.filter((c) => Number(c.ativo));
+
+    // Render Users
+    const containerUsuarios = document.getElementById('lista-usuarios');
+    if (containerUsuarios) {
+      if (!usuarios.length) {
+        containerUsuarios.innerHTML = '<div class="vazio">Nenhum motorista cadastrado.</div>';
+      } else {
+        containerUsuarios.innerHTML = usuarios.map((u) => {
+          const ehProprio = u.id === estado.usuario?.id;
+          const isAdmin = u.papel === 'admin';
+          return `
+            <div class="item-ajustes-entidade ${Number(u.ativo) ? '' : 'inativo'}">
+              <div style="display:flex;align-items:center;gap:12px;min-width:0">
+                <div class="avatar-usuario-ajustes">${iniciais(u.nome)}</div>
+                <div class="dados-entidade-ajustes">
+                  <strong>${esc(u.nome)} ${ehProprio ? '<small style="color:var(--primaria)">(Você)</small>' : ''}</strong>
+                  <small>@${esc(u.usuario)}${u.telefone ? ` • 📞 ${esc(u.telefone)}` : ''}</small>
+                  <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
+                    <span class="badge-status ${isAdmin ? 'aberta' : 'encerrada'}">
+                      ${isAdmin ? 'Proprietário' : 'Motorista'}
+                    </span>
+                    ${Number(u.ativo) ? '<span class="tag-status-visivel">Acesso Ativo</span>' : '<span class="tag-status-oculta">Bloqueado</span>'}
+                  </div>
+                </div>
+              </div>
+              <div class="acoes-entidade-ajustes">
+                <button class="btn pequeno" type="button" data-editar-usuario="${u.id}">
+                  ${icone('editar')} Editar
+                </button>
+                ${!isAdmin ? `
+                  <button class="btn pequeno perigo" type="button" data-excluir-usuario="${u.id}" title="Remover motorista">
+                    ${icone('lixeira')} Excluir
+                  </button>` : ''}
+              </div>
+            </div>`;
+        }).join('');
+      }
+    }
+
+    // Render Trucks
+    const containerCaminhoes = document.getElementById('lista-caminhoes');
+    if (containerCaminhoes) {
+      if (!caminhoes.length) {
+        containerCaminhoes.innerHTML = '<div class="vazio">Nenhum caminhão cadastrado na frota.</div>';
+      } else {
+        containerCaminhoes.innerHTML = caminhoes.map((c) => `
+          <div class="item-ajustes-entidade ${Number(c.ativo) ? '' : 'inativo'}">
+            <div style="display:flex;align-items:center;gap:12px;min-width:0">
+              <div class="avatar-caminhao-ajustes">${icone('caminhao')}</div>
+              <div class="dados-entidade-ajustes">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  <span class="badge-placa">${esc(c.placa)}</span>
+                  <strong>${esc(c.apelido || 'Sem apelido')}</strong>
+                </div>
+                <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
+                  ${Number(c.ativo) ? '<span class="tag-status-visivel">Em Operação</span>' : '<span class="tag-status-oculta">Inativo / Parado</span>'}
+                </div>
+              </div>
+            </div>
+            <div class="acoes-entidade-ajustes">
+              <button class="btn pequeno" type="button" data-editar-caminhao="${c.id}">
+                ${icone('editar')} Editar
+              </button>
+              <button class="btn pequeno perigo" type="button" data-excluir-caminhao="${c.id}" title="Remover caminhão">
+                ${icone('lixeira')} Excluir
+              </button>
+            </div>
+          </div>`).join('');
+      }
+    }
+
+    // Render Categories
+    const renderCategorias = () => {
+      const containerCats = document.getElementById('lista-categorias');
+      if (!containerCats) return;
+
+      const filtradas = categorias.filter((c) => {
+        if (filtroCategoriaAtivo === 'todos') return true;
+        return c.tipo === filtroCategoriaAtivo;
+      });
+
+      if (!filtradas.length) {
+        containerCats.innerHTML = '<div class="vazio" style="padding:24px 16px">Nenhuma categoria encontrada para este filtro.</div>';
+        return;
+      }
+
+      containerCats.innerHTML = `
+        <div class="grade-categorias-ajustes">
+          ${filtradas.map((c) => {
+            const qtd = Number(c.qtd_lancamentos) || 0;
+            const ehEntrada = c.tipo === 'entrada';
+            return `
+            <div class="item-categoria-cartao ${Number(c.ativo) ? '' : 'inativa'}">
+              <div class="cabecalho-categoria-cartao">
+                <div class="icone-categoria-caixa ${c.tipo}">
+                  ${icone(ehEntrada ? 'receber' : (c.pede_litros ? 'combustivel' : 'tag'))}
+                </div>
+                <div class="detalhes-categoria-cartao">
+                  <strong>${esc(c.nome)}</strong>
+                  <div class="badges-categoria-linha">
+                    <span class="tag-meta ${c.tipo}">
+                      ${ehEntrada ? 'Receita / Frete' : 'Despesa'}
+                    </span>
+                    ${c.pede_litros ? `<span class="tag-meta combustivel">${icone('combustivel')} Pede Litros</span>` : ''}
+                    ${c.pede_descricao ? `<span class="tag-meta">${icone('editar')} Pede Descrição</span>` : ''}
+                    <span class="tag-meta">
+                      ${qtd ? `${qtd} ${qtd === 1 ? 'lançamento' : 'lançamentos'}` : 'Sem lançamentos'}
+                    </span>
+                    ${Number(c.ativo) ? '<span class="tag-status-visivel">Visível</span>' : '<span class="tag-status-oculta">Oculta</span>'}
+                  </div>
+                </div>
+              </div>
+              <div class="acoes-categoria-cartao">
+                <button class="btn pequeno" type="button" data-editar-categoria="${c.id}">
+                  ${icone('editar')} Editar
+                </button>
+                <button class="btn pequeno perigo" type="button" data-excluir-categoria="${c.id}" title="Excluir categoria">
+                  ${icone('lixeira')} Excluir
+                </button>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>`;
+
+      containerCats.querySelectorAll('[data-editar-categoria]').forEach((b) => {
+        const c = categorias.find((x) => Number(x.id) === Number(b.dataset.editarCategoria));
+        b.onclick = () => formCategoria(c, atualiza);
+      });
+      containerCats.querySelectorAll('[data-excluir-categoria]').forEach((b) => {
+        const c = categorias.find((x) => Number(x.id) === Number(b.dataset.excluirCategoria));
+        b.onclick = () => excluiCategoria(c, atualiza);
+      });
+    };
+
+    renderCategorias();
+
+    const rotuloAcordeon = alvo.querySelector('#rotulo-acordeon-categorias');
+    if (rotuloAcordeon) {
+      rotuloAcordeon.textContent = `Categorias Cadastradas (${categorias.length})`;
+    }
+
+    const bToggle = alvo.querySelector('#b-toggle-categorias');
+    const corpoCats = alvo.querySelector('#conteudo-acordeon-categorias');
+    const txtEstado = alvo.querySelector('#texto-estado-acordeon');
+    const chevron = alvo.querySelector('#icone-chevron-acordeon');
+    if (bToggle && corpoCats) {
+      bToggle.onclick = () => {
+        const estaOculto = corpoCats.classList.contains('oculto');
+        corpoCats.classList.toggle('oculto', !estaOculto);
+        bToggle.setAttribute('aria-expanded', String(estaOculto));
+        if (txtEstado) txtEstado.textContent = estaOculto ? 'Recolher' : 'Expandir';
+        if (chevron) chevron.textContent = estaOculto ? '▴' : '▾';
+      };
+    }
+
+    // Setup Category Filter Buttons
+    const botoesFiltro = alvo.querySelectorAll('[data-filtro-cat]');
+    botoesFiltro.forEach((b) => {
+      b.onclick = () => {
+        botoesFiltro.forEach((btn) => btn.setAttribute('aria-pressed', String(btn === b)));
+        filtroCategoriaAtivo = b.dataset.filtroCat;
+        renderCategorias();
+      };
+    });
+
+    // Wire User actions
+    alvo.querySelectorAll('[data-editar-usuario]').forEach((b) => {
+      const u = usuarios.find((x) => Number(x.id) === Number(b.dataset.editarUsuario));
+      b.onclick = () => formUsuario(u, atualiza);
+    });
+    alvo.querySelectorAll('[data-excluir-usuario]').forEach((b) => {
+      const u = usuarios.find((x) => Number(x.id) === Number(b.dataset.excluirUsuario));
+      b.onclick = () => excluiUsuario(u, atualiza);
+    });
+
+    // Wire Truck actions
+    alvo.querySelectorAll('[data-editar-caminhao]').forEach((b) => {
+      const c = caminhoes.find((x) => Number(x.id) === Number(b.dataset.editarCaminhao));
+      b.onclick = () => formCaminhao(c, atualiza);
+    });
+    alvo.querySelectorAll('[data-excluir-caminhao]').forEach((b) => {
+      const c = caminhoes.find((x) => Number(x.id) === Number(b.dataset.excluirCaminhao));
+      b.onclick = () => excluiCaminhao(c, atualiza);
+    });
+  };
+
+  alvo.querySelector('#b-usuario').onclick = () => formUsuario(null, atualiza);
+  alvo.querySelector('#b-caminhao').onclick = () => formCaminhao(null, atualiza);
+  alvo.querySelector('#b-categoria').onclick = () => formCategoria(null, atualiza);
+  await atualiza();
+}
+
+function formUsuario(u, aoConcluir) {
+  const novo = !u;
+  const { elemento, fechar } = janela(novo ? 'Novo Motorista ou Acesso' : `Editar ${u.nome}`, `
+    <form novalidate>
+      <div class="campo">
+        <label for="u-nome">Nome completo ou apelido</label>
+        <input id="u-nome" name="nome" required maxlength="80" value="${esc(u?.nome || '')}" placeholder="Ex.: Carlos Eduardo">
+      </div>
+      <div class="campo">
+        <label for="u-usuario">Usuário para login</label>
+        <p class="dica">Sem espaços e sem acento. Ex.: carloseduardo</p>
+        <input id="u-usuario" name="usuario" ${novo ? 'required' : 'disabled'}
+               autocapitalize="none" spellcheck="false" value="${esc(u?.usuario || '')}" placeholder="carloseduardo">
+      </div>
+      <div class="campo">
+        <label for="u-senha">${novo ? 'Senha de acesso' : 'Nova senha'}</label>
+        ${novo ? '' : '<p class="dica">Deixe em branco para manter a senha cadastrada.</p>'}
+        <input id="u-senha" name="${novo ? 'senha' : 'senha_nova'}" ${novo ? 'required' : ''}
+               autocomplete="new-password" placeholder="${novo ? 'Mínimo de 4 dígitos' : 'Digite para redefinir'}">
+      </div>
+      <div class="linha duas">
+        <div class="campo">
+          <label for="u-papel">Nível de acesso</label>
+          <select id="u-papel" name="papel">
+            <option value="motorista" ${u?.papel !== 'admin' ? 'selected' : ''}>
+              Motorista (lança despesas e acompanha viagens)
+            </option>
+            <option value="admin" ${u?.papel === 'admin' ? 'selected' : ''}>
+              Proprietário (vê relatórios e administra tudo)
+            </option>
+          </select>
+        </div>
+        <div class="campo opcional">
+          <label for="u-telefone">Telefone / WhatsApp</label>
+          <input id="u-telefone" name="telefone" type="tel" value="${esc(u?.telefone || '')}" placeholder="(00) 00000-0000">
+        </div>
+      </div>
+      ${novo ? '' : `
+        <div class="campo">
+          <label for="u-ativo">Situação do acesso</label>
+          <select id="u-ativo" name="ativo">
+            <option value="1" ${Number(u.ativo) ? 'selected' : ''}>Liberado (consegue entrar no sistema)</option>
+            <option value="0" ${Number(u.ativo) ? '' : 'selected'}>Bloqueado (acesso temporariamente suspenso)</option>
+          </select>
+        </div>`}
+      <div class="acoes fim">
+        ${!novo && u?.papel !== 'admin' ? `
+          <button class="btn perigo" type="button" data-remover-usuario style="margin-right:auto">
+            ${icone('lixeira')} Excluir Motorista
+          </button>` : ''}
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">${icone('check')} Salvar</button>
+      </div>
+    </form>`);
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+
+  const btnRemover = form.querySelector('[data-remover-usuario]');
+  if (btnRemover) {
+    btnRemover.onclick = () => {
+      fechar();
+      excluiUsuario(u, aoConcluir);
+    };
+  }
+
+  aoEnviar(form, async (dados) => {
+    dados.ativo = dados.ativo === undefined ? true : dados.ativo === '1';
+    if (novo) await api('POST', 'usuarios', {}, dados);
+    else await api('PUT', 'usuario', { id: u.id }, dados);
+    fechar();
+    recado('Usuário salvo com sucesso.');
+    await aoConcluir?.();
+  });
+}
+
+function formCaminhao(c, aoConcluir) {
+  const novo = !c;
+  const { elemento, fechar } = janela(novo ? 'Novo Caminhão' : `Editar Caminhão ${c.placa}`, `
+    <form novalidate>
+      <div class="campo">
+        <label for="t-placa">Placa do veículo</label>
+        <input id="t-placa" name="placa" required maxlength="10" autocapitalize="characters"
+               value="${esc(c?.placa || '')}" placeholder="Ex.: ABC1D23">
+      </div>
+      <div class="campo opcional">
+        <label for="t-apelido">Apelido ou modelo do caminhão</label>
+        <p class="dica">Ajuda o motorista e o gestor a reconhecer. Ex.: Scania R450 Vermelha</p>
+        <input id="t-apelido" name="apelido" maxlength="60" value="${esc(c?.apelido || '')}" placeholder="Scania R450">
+      </div>
+      ${novo ? '' : `
+        <div class="campo">
+          <label for="t-ativo">Situação operacional</label>
+          <select id="t-ativo" name="ativo">
+            <option value="1" ${Number(c.ativo) ? 'selected' : ''}>Em uso ativo na frota</option>
+            <option value="0" ${Number(c.ativo) ? '' : 'selected'}>Fora de operação / Inativo</option>
+          </select>
+        </div>`}
+      <div class="acoes fim">
+        ${!novo ? `
+          <button class="btn perigo" type="button" data-remover-caminhao style="margin-right:auto">
+            ${icone('lixeira')} Excluir Caminhão
+          </button>` : ''}
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">${icone('check')} Salvar</button>
+      </div>
+    </form>`);
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+
+  const btnRemover = form.querySelector('[data-remover-caminhao]');
+  if (btnRemover) {
+    btnRemover.onclick = () => {
+      fechar();
+      excluiCaminhao(c, aoConcluir);
+    };
+  }
+
+  aoEnviar(form, async (dados) => {
+    dados.ativo = dados.ativo === undefined ? true : dados.ativo === '1';
+    if (novo) await api('POST', 'caminhoes', {}, dados);
+    else await api('PUT', 'caminhao', { id: c.id }, dados);
+    fechar();
+    recado('Caminhão salvo com sucesso.');
+    await aoConcluir?.();
+  });
+}
+
+const EXEMPLOS_CATEGORIA = {
+  saida: 'Ex.: Combustível, Pedágio, Mecânica, Troca de Óleo, Pneus, Alimentação, Diária.',
+  entrada: 'Ex.: Frete de Grãos, Frete de Madeira, Retorno de Carga, Aluguel de Carreta.',
+};
+
+function formCategoria(c, aoConcluir) {
+  const novo = !c;
+  const tipo = c?.tipo || 'saida';
+  const travada = !novo && Number(c.qtd_lancamentos) > 0;
+  const { elemento, fechar } = janela(novo ? 'Nova Categoria Financeira' : `Editar Categoria ${c.nome}`, `
+    <form novalidate>
+      <div class="campo">
+        <label>Tipo de movimentação</label>
+        ${travada ? '<p class="dica">Já possui lançamentos associados, por isso o tipo não pode ser alterado.</p>' : ''}
+        <div class="escolha" role="group">
+          ${[['saida', 'Gasto / Despesa', 'Dinheiro que sai da frota'], ['entrada', 'Entrada / Frete', 'Dinheiro que entra na frota']].map(([v, nome, dica]) => `
+            <button type="button" data-tipo="${v}" aria-pressed="${tipo === v}" ${travada ? 'disabled' : ''}>
+              ${nome}<small>${dica}</small>
+            </button>`).join('')}
+        </div>
+        <input type="hidden" name="tipo" value="${tipo}">
+      </div>
+      <div class="campo">
+        <label for="k-nome">Nome da categoria</label>
+        <p class="dica" data-exemplo>${EXEMPLOS_CATEGORIA[tipo]}</p>
+        <input id="k-nome" name="nome" required maxlength="40" value="${esc(c?.nome || '')}" placeholder="Ex.: Manutenção Preventiva">
+      </div>
+      ${novo ? '' : `
+        <div class="campo">
+          <label for="k-ativo">Visibilidade ao lançar</label>
+          <select id="k-ativo" name="ativo">
+            <option value="1" ${Number(c.ativo) ? 'selected' : ''}>Visível (aparece no formulário de lançamentos)</option>
+            <option value="0" ${Number(c.ativo) ? '' : 'selected'}>Oculta (não aparece para novos lançamentos, mantém histórico)</option>
+          </select>
+        </div>`}
+      <div class="acoes fim">
+        ${!novo ? `
+          <button class="btn perigo" type="button" data-remover-categoria style="margin-right:auto">
+            ${icone('lixeira')} Excluir Categoria
+          </button>` : ''}
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">${icone('check')} Salvar Categoria</button>
+      </div>
+    </form>`);
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+
+  const btnRemover = form.querySelector('[data-remover-categoria]');
+  if (btnRemover) {
+    btnRemover.onclick = () => {
+      fechar();
+      excluiCategoria(c, aoConcluir);
+    };
+  }
+
+  form.querySelectorAll('[data-tipo]').forEach((b) => {
+    b.onclick = () => {
+      form.querySelectorAll('[data-tipo]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      form.elements.tipo.value = b.dataset.tipo;
+      form.querySelector('[data-exemplo]').textContent = EXEMPLOS_CATEGORIA[b.dataset.tipo];
+    };
+  });
+
+  aoEnviar(form, async (dados) => {
+    dados.ativo = dados.ativo === undefined ? true : dados.ativo === '1';
+    if (novo) await api('POST', 'categorias', {}, dados);
+    else await api('PUT', 'categoria', { id: c.id }, dados);
+    fechar();
+    recado('Categoria salva com sucesso.');
+    await aoConcluir?.();
+  });
+}
+
+async function excluiCategoria(c, aoConcluir) {
+  const qtd = Number(c.qtd_lancamentos) || 0;
+  if (qtd > 0) {
+    const { elemento, fechar } = janela('Não é possível excluir', `
+      <div class="aviso info">
+        A categoria "${esc(c.nome)}" tem ${qtd} ${qtd === 1 ? 'lançamento' : 'lançamentos'}
+        e não pode ser apagada sem perder esse histórico.
+      </div>
+      ${Number(c.ativo) ? `
+        <p class="ajuda">Você pode escondê-la: ela some da hora de lançar, mas os lançamentos
+        antigos continuam nos relatórios.</p>` : '<p class="ajuda">Ela já está escondida.</p>'}
+      <div class="acoes fim">
+        <button class="btn" type="button" data-cancelar>${Number(c.ativo) ? 'Cancelar' : 'Fechar'}</button>
+        ${Number(c.ativo) ? '<button class="btn principal" type="button" data-esconder>Esconder categoria</button>' : ''}
+      </div>`);
+    elemento.querySelector('[data-cancelar]').onclick = fechar;
+    elemento.querySelector('[data-esconder]')?.addEventListener('click', async () => {
+      await api('PUT', 'categoria', { id: c.id }, { nome: c.nome, tipo: c.tipo, ativo: false });
+      fechar();
+      recado('Categoria escondida.');
+      await aoConcluir?.();
+    });
+    return;
+  }
+  if (!confirm(`Excluir a categoria "${c.nome}"? Não dá para desfazer.`)) return;
+  try {
+    await api('DELETE', 'categoria', { id: c.id });
+    recado('Categoria excluída.');
+    await aoConcluir?.();
+  } catch (erro) {
+    recado(erro.message);
+  }
+}
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+
+(async function inicia() {
+  try {
+    estado.usuario = await api('GET', 'eu');
+    await iniciaApp();
+  } catch (erro) {
+    if (/PHP|inesperada|conectar|MySQL/i.test(erro.message)) {
+      document.body.classList.add('tela-entrada');
+      app.innerHTML = `<div class="tela-login"><div class="cartao">
+        <div class="logo">${LOGO}</div>
+        <h1>Quase lá</h1>
+        <div class="aviso erro">${esc(erro.message)}</div>
+        <p class="ajuda">Corrija o item acima e recarregue a página.</p>
+      </div></div>`;
+      return;
+    }
+    telaLogin();
+  }
+})();

@@ -1,0 +1,7 @@
+{
+  "name": "Controle da Frota",
+  "description": "Sistema web para controle financeiro, fretes, gastos, viagens e desempenho de frota de caminhões.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
