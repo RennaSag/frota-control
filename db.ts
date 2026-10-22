@@ -53,6 +53,7 @@ export class Database {
         icone,
         pede_litros,
         pede_descricao,
+        oculta_motorista: nome === 'Salário do motorista' ? 1 : 0,
         ordem,
         ativo: 1,
       });
@@ -69,6 +70,7 @@ export class Database {
       senha_hash: bcrypt.hashSync(adminSenha, 10),
       papel: 'admin',
       telefone: '(11) 99999-0000',
+      caminhao_padrao_id: null,
       ativo: 1,
       criado_em: agora,
     });
@@ -81,6 +83,7 @@ export class Database {
       senha_hash: bcrypt.hashSync('1234', 10),
       papel: 'motorista',
       telefone: '(11) 98888-1111',
+      caminhao_padrao_id: 1,
       ativo: 1,
       criado_em: agora,
     });
@@ -387,7 +390,7 @@ export class Database {
   }
 
   // Aviso methods
-  addAviso(usuarioId: number, acao: string, tipo: string, lancamentoId: number | null, resumo: string) {
+  addAviso(usuarioId: number, acao: string, tipo: string, lancamentoId: number | null, resumo: string, paraUsuarioId: number | null = null) {
     const id = this.nextAvisoId++;
     const criado_em = new Date().toISOString().replace('T', ' ').slice(0, 19);
     this.avisos.push({
@@ -398,6 +401,7 @@ export class Database {
       lancamento_id: lancamentoId,
       resumo: resumo.slice(0, 200),
       criado_em,
+      para_usuario_id: paraUsuarioId,
     });
     return id;
   }
@@ -416,6 +420,7 @@ export class Database {
       categoria_tipo: cat ? cat.tipo : l.tipo,
       pede_litros: cat ? cat.pede_litros : 0,
       pede_descricao: cat ? cat.pede_descricao : 0,
+      oculta_motorista: cat ? (cat.oculta_motorista || 0) : 0,
       motorista: user ? user.nome : 'Motorista removido',
       placa: truck ? truck.placa : (l.caminhao_id ? 'Removido' : null),
       caminhao_apelido: truck ? truck.apelido : null,

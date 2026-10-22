@@ -7,20 +7,28 @@
   <meta name="description" content="Sistema web para controle financeiro, fretes, gastos, viagens e desempenho de frota de caminhões.">
   <meta property="og:title" content="Controle da Frota">
   <meta property="og:description" content="Sistema web para controle financeiro, fretes, gastos, viagens e desempenho de frota de caminhões.">
-  <meta name="theme-color" content="#ffffff">
-  <link rel="manifest" href="/manifest.php">
+  <meta name="theme-color" content="#4338ca">
+  <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="/assets/icone.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/assets/icone.svg">
+  <link rel="apple-touch-icon" href="/assets/logo.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Controle da Frota">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/estilo.css?v=2.0.0">
+  <link rel="stylesheet" href="/assets/estilo.css?v=2.1.0">
 </head>
 <body>
   <div id="app"><p class="carregando">Carregando…</p></div>
-  <script>window.NOME_SISTEMA = "Controle da Frota";</script>
-  <script src="/assets/app.js?v=1.8.0"></script>
+  <script>
+    window.NOME_SISTEMA = "Controle da Frota";
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
+  <script src="/assets/app.js?v=2.1.0"></script>
 </body>
 </html>

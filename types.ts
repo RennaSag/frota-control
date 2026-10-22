@@ -5,6 +5,7 @@ export interface Usuario {
   senha_hash: string;
   papel: 'admin' | 'motorista';
   telefone: string | null;
+  caminhao_padrao_id?: number | null;
   ativo: number;
   criado_em: string;
 }
@@ -24,6 +25,7 @@ export interface Categoria {
   icone: string;
   pede_litros: number;
   pede_descricao: number;
+  oculta_motorista?: number;
   ordem: number;
   ativo: number;
 }
@@ -74,4 +76,6 @@ export interface Aviso {
   lancamento_id: number | null;
   resumo: string;
   criado_em: string;
+  para_usuario_id?: number | null;
 }
+

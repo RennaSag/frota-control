@@ -1,3 +1,9 @@
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+});
+
 const app = document.getElementById('app');
 
 const estado = {
@@ -8,7 +14,10 @@ const estado = {
   usuarios: [],
   viagensAbertas: [],
   mes: hoje().slice(0, 7),
-  filtros: {},
+  filtros: {
+    de: `${hoje().slice(0, 7)}-01`,
+    ate: hoje(),
+  },
   versaoAba: 0,
   modoGrafico: 'linha', // 'linha' | 'barras' | 'pizza'
 };
@@ -93,7 +102,12 @@ const ICONES_SVG = {
   gota: '<path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/>',
   check: '<polyline points="20 6 9 17 4 12"/>',
   aviso: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
-  escudo: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
+  escudo: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  filtro: '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
+  sair: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
+  telefone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  celular: '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+  relogio: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
 };
 
 function icone(nome, extraClasse = '') {
@@ -288,7 +302,6 @@ function telaLogin(mensagem) {
 }
 
 const ABAS_MOTORISTA = [
-  { id: 'novo', ico: 'registrar', nome: 'Registrar' },
   { id: 'meus', ico: 'lista', nome: 'Meus gastos' },
   { id: 'viagens', ico: 'rota', nome: 'Viagens' },
   { id: 'perfil', ico: 'usuario', nome: 'Perfil' },
@@ -321,10 +334,6 @@ async function iniciaApp() {
 }
 
 function desenhaEstrutura() {
-  const agora = new Date();
-  const opcoesData = { weekday: 'short', day: 'numeric', month: 'short' };
-  const dataHojeFormatada = agora.toLocaleDateString('pt-BR', opcoesData);
-
   app.innerHTML = `
     <div class="painel-layout">
       <aside class="barra-lateral">
@@ -355,7 +364,7 @@ function desenhaEstrutura() {
             </div>
           </div>
           <button type="button" class="btn-sair-lateral" id="b-sair-sidebar" title="Sair da conta">
-            ${svg('fechar')}
+            ${svg('sair')}
           </button>
         </div>
       </aside>
@@ -372,7 +381,7 @@ function desenhaEstrutura() {
             <button class="sino" type="button" id="b-avisos" aria-label="Notificações e Avisos">
               ${svg('sino')}<span class="contador oculto" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn principal pequeno" id="b-acao-topo">
+            <button type="button" class="btn principal pequeno oculta-pc" id="b-acao-topo">
               ${svg('registrar')} <span>${ehAdmin() ? 'Novo Lançamento' : 'Novo Gasto'}</span>
             </button>
           </div>
@@ -399,6 +408,7 @@ function desenhaEstrutura() {
   const bSair = document.getElementById('b-sair-sidebar');
   if (bSair) {
     bSair.onclick = async () => {
+      if (!confirm('Tem certeza de que deseja sair da conta?')) return;
       try { await api('POST', 'logout'); } catch {}
       localStorage.removeItem('frota_token');
       estado.usuario = null;
@@ -569,7 +579,7 @@ async function abreAvisos() {
     return;
   }
   const podePedir = 'Notification' in window && Notification.permission === 'default';
-
+  const naoLidosOriginais = new Set(r.itens.filter((a) => a.novo).map((a) => a.id));
   let filtroAvisos = 'todos';
 
   function iconeAviso(a) {
@@ -583,14 +593,14 @@ async function abreAvisos() {
 
   function renderItens() {
     const filtrados = r.itens.filter((a) => {
-      if (filtroAvisos === 'nao_lidos') return a.novo;
+      if (filtroAvisos === 'nao_lidos') return naoLidosOriginais.has(a.id);
       return true;
     });
 
     if (!filtrados.length) {
       return `
         <div class="vazio" style="padding:28px 16px;text-align:center">
-          <div style="font-size:2rem;margin-bottom:8px">🔔</div>
+          <div style="margin-bottom:8px;color:var(--primaria)">${icone('sino')}</div>
           <p style="font-weight:600;margin:0 0 4px">Tudo limpo por aqui!</p>
           <small style="color:var(--tinta-3)">${filtroAvisos === 'nao_lidos' ? 'Nenhuma notificação não lida.' : 'Nenhuma notificação registrada recentemente.'}</small>
         </div>`;
@@ -603,8 +613,9 @@ async function abreAvisos() {
           const ehViagem = a.tipo === 'viagem';
           const ehExclusao = a.acao === 'excluiu';
           const corClasse = ehEntrada ? 'entrada' : (ehViagem ? 'viagem' : (ehExclusao ? 'exclusao' : 'saida'));
+          const eNova = naoLidosOriginais.has(a.id);
           return `
-            <div class="card-notificacao ${a.novo ? 'nao-lida' : ''} ${a.lancamento_id ? 'interativa' : ''}"
+            <div class="card-notificacao ${eNova ? 'nao-lida' : ''} ${a.lancamento_id ? 'interativa' : ''}"
                  ${a.lancamento_id ? `data-lancamento="${a.lancamento_id}"` : ''}
                  role="${a.lancamento_id ? 'button' : 'article'}" tabindex="${a.lancamento_id ? '0' : '-1'}">
               <div class="icone-notificacao ${corClasse}">
@@ -613,11 +624,11 @@ async function abreAvisos() {
               <div class="corpo-notificacao">
                 <div class="topo-notificacao">
                   <strong>${esc(textoAviso(a))}</strong>
-                  ${a.novo ? '<span class="badge-notificacao-nova">Nova</span>' : ''}
+                  ${eNova ? '<span class="badge-notificacao-nova">Nova</span>' : ''}
                 </div>
                 <div class="resumo-notificacao">${esc(a.resumo)}</div>
                 <div class="meta-notificacao">
-                  <span class="tempo-notificacao">🕒 ${quandoAviso(a.segundos)}</span>
+                  <span class="tempo-notificacao">${icone('relogio')} ${quandoAviso(a.segundos)}</span>
                   ${a.lancamento_id ? '<span class="dica-toque-notificacao">Toque para ver lançamento ›</span>' : ''}
                 </div>
               </div>
@@ -679,6 +690,7 @@ async function abreAvisos() {
       try {
         await api('POST', 'avisos-lidos');
         mostraContador(0);
+        naoLidosOriginais.clear();
         r.itens.forEach((a) => { a.novo = false; });
         r.nao_lidos = 0;
         bMarcar.remove();
@@ -704,7 +716,7 @@ async function abreAvisos() {
     try {
       await api('POST', 'avisos-lidos');
       mostraContador(0);
-      r.itens.forEach((a) => { a.novo = false; });
+      r.nao_lidos = 0;
     } catch {}
   }
 }
@@ -778,7 +790,7 @@ function camposLancamento(tipo, l = {}) {
       <div class="campo">
         <label for="c-caminhao">Caminhão</label>
         <select id="c-caminhao" name="caminhao_id">
-          ${opcoesCaminhao(l.caminhao_id, l.placa
+          ${opcoesCaminhao(l.caminhao_id || (l.id ? null : (ehAdmin() ? (estado.usuarios.find((u) => Number(u.id) === Number(l.usuario_id || estado.usuario.id))?.caminhao_padrao_id || estado.usuario.caminhao_padrao_id) : estado.usuario.caminhao_padrao_id)), l.placa
             ? { id: l.caminhao_id, placa: l.placa, apelido: l.caminhao_apelido } : null)}
         </select>
       </div>

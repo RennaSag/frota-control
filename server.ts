@@ -291,7 +291,18 @@ async function despacha(req: Request, res: Response) {
         usuario: u.usuario,
         papel: u.papel,
         telefone: u.telefone,
+        caminhao_padrao_id: u.caminhao_padrao_id ?? null,
       };
+    }
+
+    case 'PUT meu-perfil': {
+      const eu = exigeLogin(req);
+      const { caminhao_padrao_id, telefone } = req.body || {};
+      db.updateUsuario(eu.id, {
+        caminhao_padrao_id: caminhao_padrao_id !== undefined ? (caminhao_padrao_id ? parseInt(caminhao_padrao_id, 10) : null) : eu.caminhao_padrao_id,
+        telefone: telefone !== undefined ? (telefone ? String(telefone).trim() : null) : eu.telefone,
+      });
+      return { ok: true };
     }
 
     case 'POST trocar-senha': {
@@ -312,7 +323,7 @@ async function despacha(req: Request, res: Response) {
     case 'GET usuarios': {
       const eu = exigeLogin(req);
       if (eu.papel !== 'admin') {
-        return [{ id: eu.id, nome: eu.nome, papel: eu.papel, ativo: 1 }];
+        return [{ id: eu.id, nome: eu.nome, papel: eu.papel, ativo: 1, caminhao_padrao_id: eu.caminhao_padrao_id ?? null }];
       }
       return [...db.usuarios]
         .sort((a, b) => b.ativo - a.ativo || a.papel.localeCompare(b.papel) || a.nome.localeCompare(b.nome))
@@ -322,6 +333,7 @@ async function despacha(req: Request, res: Response) {
           usuario: u.usuario,
           papel: u.papel,
           telefone: u.telefone,
+          caminhao_padrao_id: u.caminhao_padrao_id ?? null,
           ativo: u.ativo,
           criado_em: u.criado_em,
         }));
@@ -329,7 +341,7 @@ async function despacha(req: Request, res: Response) {
 
     case 'POST usuarios': {
       exigeAdmin(req);
-      const { nome, usuario, senha, papel, telefone } = req.body || {};
+      const { nome, usuario, senha, papel, telefone, caminhao_padrao_id } = req.body || {};
       const nStr = String(nome || '').trim();
       const uStr = String(usuario || '').trim().toLowerCase().replace(/\s+/g, '');
       const sStr = String(senha || '');
@@ -352,6 +364,7 @@ async function despacha(req: Request, res: Response) {
         senha_hash: bcrypt.hashSync(sStr, 10),
         papel: pStr,
         telefone: telefone ? String(telefone).trim() : null,
+        caminhao_padrao_id: caminhao_padrao_id ? parseInt(caminhao_padrao_id, 10) : null,
         ativo: 1,
       });
       return { id };
@@ -360,16 +373,25 @@ async function despacha(req: Request, res: Response) {
     case 'PUT usuario': {
       const eu = exigeAdmin(req);
       const id = parseInt(req.query.id as string, 10);
-      const { nome, telefone, papel, ativo, senha_nova } = req.body || {};
+      const { nome, telefone, papel, ativo, senha_nova, caminhao_padrao_id } = req.body || {};
       const u = db.usuarios.find((x) => x.id === id);
       if (!u) throw new ErroDeUso('Usuário não encontrado.', 404);
 
-      const pStr = papel === 'admin' ? 'admin' : 'motorista';
-      const atv = ativo === 0 || ativo === false ? 0 : 1;
+      let pStr = u.papel;
+      let atv = u.ativo;
 
-      if (u.id === eu.id && (pStr !== 'admin' || !atv)) {
-        throw new ErroDeUso('Você não pode remover o seu próprio acesso de proprietário.');
+      if (u.id === eu.id) {
+        if (ativo !== undefined && (ativo === 0 || ativo === false)) {
+          throw new ErroDeUso('Você não pode bloquear o seu próprio acesso.');
+        }
+        if (papel && papel !== eu.papel) {
+          throw new ErroDeUso('Você não pode alterar o seu próprio tipo de acesso.');
+        }
+      } else {
+        pStr = papel === 'admin' ? 'admin' : 'motorista';
+        atv = ativo === 0 || ativo === false ? 0 : 1;
       }
+
       if (u.papel === 'admin' && pStr !== 'admin') {
         const outros = db.usuarios.filter((x) => x.papel === 'admin' && x.ativo === 1 && x.id !== id).length;
         if (outros === 0) {
@@ -379,9 +401,10 @@ async function despacha(req: Request, res: Response) {
 
       db.updateUsuario(id, {
         nome: String(nome || '').trim(),
-        telefone: telefone ? String(telefone).trim() : null,
+        telefone: telefone !== undefined ? (telefone ? String(telefone).trim() : null) : u.telefone,
         papel: pStr,
         ativo: atv,
+        caminhao_padrao_id: caminhao_padrao_id !== undefined ? (caminhao_padrao_id ? parseInt(caminhao_padrao_id, 10) : null) : u.caminhao_padrao_id,
       });
 
       if (senha_nova && String(senha_nova).length >= 4) {
@@ -487,7 +510,7 @@ async function despacha(req: Request, res: Response) {
       const eu = exigeLogin(req);
       let lista = db.categorias;
       if (eu.papel !== 'admin') {
-        lista = lista.filter((c) => c.tipo === 'saida' && c.ativo === 1);
+        lista = lista.filter((c) => c.tipo === 'saida' && c.ativo === 1 && !c.oculta_motorista);
       } else if (req.query.todos !== '1') {
         lista = lista.filter((c) => c.ativo === 1);
       }
@@ -504,6 +527,7 @@ async function despacha(req: Request, res: Response) {
           icone: c.icone,
           pede_litros: c.pede_litros,
           pede_descricao: c.pede_descricao,
+          oculta_motorista: c.oculta_motorista || 0,
           ordem: c.ordem,
           ativo: c.ativo,
           ...(eu.papel === 'admin'
@@ -514,7 +538,7 @@ async function despacha(req: Request, res: Response) {
 
     case 'POST categorias': {
       exigeAdmin(req);
-      const { nome, tipo } = req.body || {};
+      const { nome, tipo, pede_litros, pede_descricao, oculta_motorista } = req.body || {};
       const nStr = String(nome || '').trim();
       const tStr = tipo === 'entrada' ? 'entrada' : 'saida';
       if (!nStr) throw new ErroDeUso('Preencha o campo "Nome".');
@@ -524,9 +548,10 @@ async function despacha(req: Request, res: Response) {
       const id = db.addCategoria({
         nome: nStr,
         tipo: tStr,
-        icone: tStr === 'entrada' ? 'plus' : 'tag',
-        pede_litros: 0,
-        pede_descricao: 0,
+        icone: tStr === 'entrada' ? 'truck' : (pede_litros ? 'fuel' : 'tag'),
+        pede_litros: pede_litros ? 1 : 0,
+        pede_descricao: pede_descricao ? 1 : 0,
+        oculta_motorista: oculta_motorista ? 1 : 0,
         ordem: 500,
         ativo: 1,
       });
@@ -536,7 +561,7 @@ async function despacha(req: Request, res: Response) {
     case 'PUT categoria': {
       exigeAdmin(req);
       const id = parseInt(req.query.id as string, 10);
-      const { nome, tipo, ativo } = req.body || {};
+      const { nome, tipo, pede_litros, pede_descricao, oculta_motorista, ativo } = req.body || {};
       const cat = db.categorias.find((c) => c.id === id);
       if (!cat) throw new ErroDeUso('Categoria não encontrada.', 404);
 
@@ -556,6 +581,9 @@ async function despacha(req: Request, res: Response) {
       db.updateCategoria(id, {
         nome: nStr,
         tipo: tStr,
+        pede_litros: pede_litros !== undefined ? (pede_litros ? 1 : 0) : cat.pede_litros,
+        pede_descricao: pede_descricao !== undefined ? (pede_descricao ? 1 : 0) : cat.pede_descricao,
+        oculta_motorista: oculta_motorista !== undefined ? (oculta_motorista ? 1 : 0) : cat.oculta_motorista,
         ativo: ativo === 0 || ativo === false ? 0 : 1,
       });
       return { ok: true };
@@ -632,7 +660,11 @@ async function despacha(req: Request, res: Response) {
         observacao: observacao ? String(observacao).trim() : null,
       });
 
-      if (eu.papel !== 'admin') {
+      if (eu.papel === 'admin') {
+        if (targetUserId !== eu.id) {
+          db.addAviso(eu.id, 'abriu', 'viagem', null, `Nova viagem atribuída a você: ${origStr} → ${destStr} (Saída: ${pdfData(iniStr)})`, targetUserId);
+        }
+      } else {
         db.addAviso(eu.id, 'abriu', 'viagem', null, `${origStr} → ${destStr} · saída ${pdfData(iniStr)}`);
       }
       return { id };
@@ -717,7 +749,12 @@ async function despacha(req: Request, res: Response) {
       let lista = db.lancamentos;
 
       if (eu.papel !== 'admin') {
-        lista = lista.filter((l) => l.usuario_id === eu.id && l.tipo === 'saida');
+        lista = lista.filter((l) => {
+          if (l.usuario_id !== eu.id || l.tipo !== 'saida') return false;
+          const cat = db.categorias.find((c) => c.id === l.categoria_id);
+          if (cat && cat.oculta_motorista) return false;
+          return true;
+        });
       } else {
         if (req.query.usuario_id) {
           const uid = parseInt(req.query.usuario_id as string, 10);
@@ -791,7 +828,8 @@ async function despacha(req: Request, res: Response) {
       const id = parseInt(req.query.id as string, 10);
       const l = db.lancamentos.find((x) => x.id === id);
       if (!l) throw new ErroDeUso('Lançamento não encontrado.', 404);
-      if (eu.papel !== 'admin' && l.usuario_id !== eu.id) {
+      const cat = db.categorias.find((c) => c.id === l.categoria_id);
+      if (eu.papel !== 'admin' && (l.usuario_id !== eu.id || (cat && cat.oculta_motorista))) {
         throw new ErroDeUso('Sem acesso a este lançamento.', 403);
       }
       return db.joinLancamento(l);
@@ -859,8 +897,15 @@ async function despacha(req: Request, res: Response) {
       const id = parseInt(req.query.id as string, 10);
       const atual = db.lancamentos.find((l) => l.id === id);
       if (!atual) throw new ErroDeUso('Lançamento não encontrado.', 404);
-      if (eu.papel !== 'admin' && atual.usuario_id !== eu.id) {
-        throw new ErroDeUso('Você só pode editar os seus próprios gastos.', 403);
+      if (eu.papel !== 'admin') {
+        if (atual.usuario_id !== eu.id) {
+          throw new ErroDeUso('Você só pode editar os seus próprios gastos.', 403);
+        }
+        const criadoTime = new Date(atual.criado_em.replace(' ', 'T')).getTime();
+        const diffMin = (Date.now() - criadoTime) / (60 * 1000);
+        if (diffMin > 40) {
+          throw new ErroDeUso('O prazo de 40 minutos para editar este gasto já expirou.', 403);
+        }
       }
 
       const corpo = req.body || {};
@@ -916,8 +961,15 @@ async function despacha(req: Request, res: Response) {
       const id = parseInt(req.query.id as string, 10);
       const atual = db.lancamentos.find((l) => l.id === id);
       if (!atual) throw new ErroDeUso('Lançamento não encontrado.', 404);
-      if (eu.papel !== 'admin' && atual.usuario_id !== eu.id) {
-        throw new ErroDeUso('Você só pode excluir os seus próprios gastos.', 403);
+      if (eu.papel !== 'admin') {
+        if (atual.usuario_id !== eu.id) {
+          throw new ErroDeUso('Você só pode excluir os seus próprios gastos.', 403);
+        }
+        const criadoTime = new Date(atual.criado_em.replace(' ', 'T')).getTime();
+        const diffMin = (Date.now() - criadoTime) / (60 * 1000);
+        if (diffMin > 10) {
+          throw new ErroDeUso('O prazo de 10 minutos para excluir este gasto já expirou.', 403);
+        }
       }
 
       const completo = db.joinLancamento(atual);
@@ -938,15 +990,18 @@ async function despacha(req: Request, res: Response) {
 
     case 'GET avisos': {
       const eu = exigeLogin(req);
-      const visto = db.avisosVistos.get(eu.id) ?? (db.avisos.length ? Math.max(...db.avisos.map((a) => a.id)) : 0);
-      if (!db.avisosVistos.has(eu.id)) {
-        db.avisosVistos.set(eu.id, visto);
-      }
-
       let lista = db.avisos;
       if (eu.papel !== 'admin') {
-        // Motoristas veem avisos das suas próprias ações e avisos gerais
-        lista = lista.filter((a) => a.usuario_id === eu.id || !a.usuario_id);
+        // Motoristas só veem avisos destinados especificamente a eles (ex: nova viagem atribuída)
+        lista = lista.filter((a) => a.para_usuario_id === eu.id);
+      } else {
+        // Admin vê avisos direcionados a ele ou ações realizadas pelos motoristas
+        lista = lista.filter((a) => !a.para_usuario_id || a.para_usuario_id === eu.id || a.usuario_id !== eu.id);
+      }
+
+      const visto = db.avisosVistos.get(eu.id) ?? (lista.length ? Math.max(...lista.map((a) => a.id)) : 0);
+      if (!db.avisosVistos.has(eu.id)) {
+        db.avisosVistos.set(eu.id, visto);
       }
 
       const itens = [...lista]
@@ -980,7 +1035,9 @@ async function despacha(req: Request, res: Response) {
 
     case 'POST avisos-lidos': {
       const eu = exigeLogin(req);
-      const lista = eu.papel === 'admin' ? db.avisos : db.avisos.filter((a) => a.usuario_id === eu.id || !a.usuario_id);
+      const lista = eu.papel === 'admin'
+        ? db.avisos.filter((a) => !a.para_usuario_id || a.para_usuario_id === eu.id || a.usuario_id !== eu.id)
+        : db.avisos.filter((a) => a.para_usuario_id === eu.id);
       const maxId = lista.length ? Math.max(...lista.map((a) => a.id)) : 0;
       db.avisosVistos.set(eu.id, maxId);
       return { ok: true };
@@ -988,18 +1045,23 @@ async function despacha(req: Request, res: Response) {
 
     case 'GET resumo': {
       exigeAdmin(req);
-      const hoje = new Date().toISOString().slice(0, 7);
-      let deMes = req.query.mes ? String(req.query.mes) : String(req.query.de || hoje);
-      let ateMes = req.query.mes ? String(req.query.mes) : String(req.query.ate || hoje);
-      if (deMes > ateMes) [deMes, ateMes] = [ateMes, deMes];
+      const hojeStr = new Date().toISOString().slice(0, 10);
+      const hojeMes = hojeStr.slice(0, 7);
 
+      let de = req.query.de ? String(req.query.de) : (req.query.mes ? `${req.query.mes}-01` : `${hojeMes}-01`);
+      let ate = req.query.ate ? String(req.query.ate) : (req.query.mes ? limitesDoMes(String(req.query.mes))[1] : hojeStr);
+
+      if (de.length === 7) de = `${de}-01`;
+      if (ate.length === 7) ate = limitesDoMes(ate)[1];
+
+      if (de > ate) [de, ate] = [ate, de];
+
+      const deMes = de.slice(0, 7);
+      const ateMes = ate.slice(0, 7);
       const meses = mesesEntre(deMes, ateMes);
-      const [de] = limitesDoMes(deMes);
-      const [, ate] = limitesDoMes(ateMes);
 
       const antAteMes = mesAnterior(deMes);
-      const [antDe] = limitesDoMes(mesesEntre(antAteMes, antAteMes)[0] || antAteMes);
-      const [, antAte] = limitesDoMes(antAteMes);
+      const [antDe, antAte] = limitesDoMes(antAteMes);
 
       const getTotais = (inicio: string, fim: string) => {
         const filtered = db.lancamentos.filter((l) => l.data >= inicio && l.data <= fim);
@@ -1145,8 +1207,10 @@ async function despacha(req: Request, res: Response) {
       const porDia = Array.from(dayMap.values()).sort((a, b) => a.data.localeCompare(b.data));
 
       return {
-        de: deMes,
-        ate: ateMes,
+        de,
+        ate,
+        de_mes: deMes,
+        ate_mes: ateMes,
         anterior_de: antAteMes,
         anterior_ate: antAteMes,
         atual: getTotais(de, ate),
