@@ -76,7 +76,7 @@ class Pdf
         $this->y += 36;
     }
 
-    // $colunas: [[rótulo, largura, alinhaDireita?], ...] — se não couberem, as larguras encolhem
+    // $colunas: [[rótulo, largura, alinhaDireita?], ...] - se não couberem, as larguras encolhem
     // na mesma proporção. Cada célula de $linhas é um texto ou [texto, cor].
     public function tabela(array $colunas, array $linhas, string $vazio = 'Nada neste período.'): void
     {

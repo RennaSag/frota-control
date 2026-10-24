@@ -1,7 +1,7 @@
 <?php
 require __DIR__ . '/config.php';
 $nome = htmlspecialchars(NOME_SISTEMA, ENT_QUOTES, 'UTF-8');
-$v = '3.0.0';
+$v = '3.1.0';
 ?>
 <!doctype html>
 <html lang="pt-BR">
@@ -12,8 +12,8 @@ $v = '3.0.0';
   <meta name="description" content="Controle financeiro, fretes, gastos, viagens e diárias de uma frota de caminhões.">
   <meta name="theme-color" content="#4338ca">
   <link rel="manifest" href="manifest.php">
-  <link rel="icon" href="assets/icone.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="assets/logo.png">
+  <link rel="icon" href="assets/logo-64.png?v=<?= $v ?>" type="image/png">
+  <link rel="apple-touch-icon" href="assets/logo-512.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="<?= $nome ?>">

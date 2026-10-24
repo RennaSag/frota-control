@@ -139,48 +139,6 @@ function iniciais(nome) {
   return (p.length > 1 ? p[0][0] + p[1][0] : p[0].slice(0, 2)).toUpperCase();
 }
 
-function exportarCSV(itens, nomeArquivo = 'lancamentos.csv') {
-  if (!itens || !itens.length) {
-    recado('Nenhum dado para exportar.');
-    return;
-  }
-  const cabecalhos = ['Data', 'Tipo', 'Categoria', 'Descricao', 'Valor (R$)', 'Caminhao', 'Motorista', 'Viagem', 'Litros', 'Km', 'Local', 'Cliente', 'Forma Pagamento', 'Observacao'];
-  const linhas = itens.map((l) => [
-    dataCurta(l.data),
-    l.tipo === 'entrada' ? 'Entrada (Frete)' : 'Saida (Gasto)',
-    `"${(l.categoria || '').replace(/"/g, '""')}"`,
-    `"${(l.descricao || '').replace(/"/g, '""')}"`,
-    ((Number(l.valor_centavos) || 0) / 100).toFixed(2).replace('.', ','),
-    `"${(l.placa || '').replace(/"/g, '""')}"`,
-    `"${(l.motorista || '').replace(/"/g, '""')}"`,
-    `"${l.viagem_origem ? `${l.viagem_origem} -> ${l.viagem_destino}` : ''}"`,
-    l.litros ? String(l.litros).replace('.', ',') : '',
-    l.km ? String(l.km) : '',
-    `"${(l.lugar || '').replace(/"/g, '""')}"`,
-    `"${(l.cliente || '').replace(/"/g, '""')}"`,
-    `"${(l.pagamento || '').replace(/"/g, '""')}"`,
-    `"${(l.observacao || '').replace(/"/g, '""')}"`,
-  ]);
-  baixaCSV(cabecalhos, linhas, nomeArquivo);
-}
-
-const celulaCSV = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-const reaisCSV = (centavos) => ((Number(centavos) || 0) / 100).toFixed(2).replace('.', ',');
-
-function baixaCSV(cabecalhos, linhas, nomeArquivo) {
-  const csvTexto = '\uFEFF' + [cabecalhos.join(';'), ...linhas.map((row) => row.join(';'))].join('\r\n');
-  const blob = new Blob([csvTexto], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = nomeArquivo;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-  recado('Planilha CSV gerada com sucesso.');
-}
-
 const LOGO = '<img src="assets/logo.png" alt="" width="192" height="192">';
 
 function endereco(rota, params = {}) {
@@ -342,6 +300,29 @@ function janela(titulo, corpoHtml) {
   return { elemento: fundo.querySelector('.corpo-janela'), fechar };
 }
 
+// Campo de senha com o botão do olho para mostrar ou esconder o que foi digitado.
+function campoSenha(id, nome, atributos = '') {
+  return `
+    <div class="caixa-senha">
+      <input id="${id}" name="${nome}" type="password" ${atributos}>
+      <button type="button" class="revelar-senha" data-revelar="${id}" aria-label="Mostrar senha" title="Mostrar senha">
+        ${icone('olho')}
+      </button>
+    </div>`;
+}
+
+document.addEventListener('click', (e) => {
+  const botao = e.target.closest('[data-revelar]');
+  if (!botao) return;
+  const campo = document.getElementById(botao.dataset.revelar);
+  const mostrar = campo.type === 'password';
+  campo.type = mostrar ? 'text' : 'password';
+  botao.innerHTML = icone(mostrar ? 'olhoOculto' : 'olho');
+  botao.setAttribute('aria-label', mostrar ? 'Esconder senha' : 'Mostrar senha');
+  botao.title = botao.getAttribute('aria-label');
+  campo.focus();
+});
+
 function mostraErro(form, mensagem) {
   let caixa = form.querySelector('.aviso.erro');
   if (!caixa) {
@@ -389,9 +370,9 @@ function telaLogin(mensagem) {
         </div>
         <div class="campo">
           <label for="senha">Senha</label>
-          <input id="senha" name="senha" type="password" autocomplete="current-password" required>
+          ${campoSenha('senha', 'senha', 'autocomplete="current-password" required')}
         </div>
-        <button class="btn principal grande" type="submit">Entrar</button>
+        <button class="btn principal grande botao-entrar" type="submit">Entrar</button>
       </form>
     </div>`;
   aoEnviar(app.querySelector('form'), async (dados) => {
@@ -438,7 +419,7 @@ function desenhaEstrutura() {
     <div class="painel-layout">
       <aside class="barra-lateral">
         <div class="logo-marca">
-          <div class="icone-frota">${svg('caminhao')}</div>
+          <div class="icone-frota">${LOGO}</div>
           <div class="info-marca">
             <strong>${esc(window.NOME_SISTEMA || 'Controle da Frota')}</strong>
             <span>${ehAdmin() ? 'Proprietário' : 'Motorista'}</span>
@@ -473,7 +454,7 @@ function desenhaEstrutura() {
         <header class="barra-superior">
           <div class="titulo-contexto">
             <div class="logo-movel">
-              <div class="icone-frota" style="width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg, #4338ca 0%, #3b82f6 100%);display:grid;place-items:center;color:#fff;">${svg('caminhao')}</div>
+              <div class="icone-frota icone-frota-movel">${LOGO}</div>
               <strong>${esc(window.NOME_SISTEMA || 'Controle da Frota')}</strong>
             </div>
           </div>
@@ -886,7 +867,7 @@ function opcoesCaminhao(selecionado, extra) {
     '<option value="">Selecione o caminhão</option>',
     ...comOExtra(estado.caminhoes, extra).map((c) => `
       <option value="${c.id}" ${Number(selecionado) === Number(c.id) ? 'selected' : ''}>
-        ${esc(c.placa)}${c.apelido ? ` — ${esc(c.apelido)}` : ''}
+        ${esc(c.placa)}${c.apelido ? ` - ${esc(c.apelido)}` : ''}
       </option>`),
   ].join('');
 }
@@ -911,7 +892,7 @@ function opcoesMotorista(selecionado) {
 function opcoesRecebivel(selecionado, extra) {
   return comOExtra(estado.recebiveisAbertos, extra).map((r) => `
     <option value="${r.id}" ${Number(selecionado) === Number(r.id) ? 'selected' : ''}>
-      ${esc(r.cliente)}${r.descricao ? ` — ${esc(r.descricao)}` : ''}${r.restante_centavos != null
+      ${esc(r.cliente)}${r.descricao ? ` - ${esc(r.descricao)}` : ''}${r.restante_centavos != null
         ? ` (falta ${dinheiro(r.restante_centavos)})` : ''}
     </option>`).join('');
 }
@@ -1374,7 +1355,7 @@ async function mostraResumoHoje() {
   caixa.innerHTML = `
     <div class="cartao">
       <h2>Registrado hoje</h2>
-      <p class="ajuda">${r.qtd} ${r.qtd === 1 ? 'gasto' : 'gastos'} — total ${dinheiro(r.saidas_centavos)}</p>
+      <p class="ajuda">${r.qtd} ${r.qtd === 1 ? 'gasto' : 'gastos'} - total ${dinheiro(r.saidas_centavos)}</p>
       <div class="lista">${r.itens.map((l) => itemLancamento(l)).join('')}</div>
     </div>`;
   ligaItens(caixa);
@@ -1463,9 +1444,6 @@ async function telaLancamentos(alvo) {
           </div>
           <div class="acoes" style="margin:0">
             ${admin ? `
-              <button class="btn pequeno" type="button" id="b-exportar-csv" title="Exportar CSV">
-                ${icone('download')} <span class="oculta-celular">CSV</span>
-              </button>
               <a class="btn pequeno" id="b-pdf" href="#" target="_blank" title="Relatório PDF">
                 ${icone('pdf')} <span class="oculta-celular">PDF</span>
               </a>` : ''}
@@ -1743,17 +1721,6 @@ async function telaLancamentos(alvo) {
     abreFormLancamento('saida', null, atualiza);
   };
 
-  const bCsv = alvo.querySelector('#b-exportar-csv');
-  if (bCsv) {
-    bCsv.onclick = () => {
-      if (!itensCarregados.length) {
-        recado('Nenhum dado para exportar.');
-        return;
-      }
-      exportarCSV(itensCarregados, `lancamentos-${estado.mes}.csv`);
-    };
-  }
-
   await atualiza();
 }
 
@@ -1765,14 +1732,14 @@ async function abreLancamento(id) {
     [entrada ? 'Valor recebido' : 'Valor pago', dinheiro(l.valor_centavos)],
     ['Dia', dataCurta(l.data)],
     [entrada ? 'Lançado por' : 'Motorista', l.motorista],
-    ['Caminhão', l.placa ? `${l.placa}${l.caminhao_apelido ? ` — ${l.caminhao_apelido}` : ''}` : '—'],
+    ['Caminhão', l.placa ? `${l.placa}${l.caminhao_apelido ? ` - ${l.caminhao_apelido}` : ''}` : '-'],
     ['Viagem', l.viagem_origem ? `${l.viagem_origem} → ${l.viagem_destino}` : 'Fora de viagem'],
     ['Litros', l.litros ? `${numero(l.litros)} L` : null],
     ['Preço por litro', l.litros ? dinheiro(l.valor_centavos / l.litros) : null],
     ['Km do painel', l.km ? numero(l.km) : null],
     ['Quem pagou', l.cliente],
     ['Frete a receber', l.recebivel_cliente
-      ? `${l.recebivel_cliente}${l.recebivel_descricao ? ` — ${l.recebivel_descricao}` : ''}` : null],
+      ? `${l.recebivel_cliente}${l.recebivel_descricao ? ` - ${l.recebivel_descricao}` : ''}` : null],
     [entrada ? 'Cidade / local' : 'Onde foi', l.lugar],
     [entrada ? 'Como recebeu' : 'Como pagou', l.pagamento],
     ['Observação', l.observacao],
@@ -1868,7 +1835,7 @@ async function telaViagens(alvo) {
                 <span class="ponto">${esc(v.destino)}</span>
               </div>
               <span class="badge-status ${aberta ? 'aberta' : 'encerrada'}">
-                ${aberta ? '● Em andamento' : '✓ Encerrada'}
+                ${aberta ? 'Em andamento' : 'Encerrada'}
               </span>
             </div>
 
@@ -2431,10 +2398,10 @@ function tabelaCaminhoes(lista) {
                 ${c.saldo_centavos >= 0 ? '+' : '−'}${dinheiro(Math.abs(c.saldo_centavos))}
               </td>
               <td>${dinheiro(c.combustivel_centavos)}</td>
-              <td>${litros ? numero(litros) : '—'}</td>
-              <td>${precoLitro ? dinheiro(precoLitro) : '—'}</td>
-              <td>${km ? numero(km) : '—'}</td>
-              <td>${km && litros ? numero(km / litros) : '—'}</td>
+              <td>${litros ? numero(litros) : '-'}</td>
+              <td>${precoLitro ? dinheiro(precoLitro) : '-'}</td>
+              <td>${km ? numero(km) : '-'}</td>
+              <td>${km && litros ? numero(km / litros) : '-'}</td>
             </tr>`;
           }).join('') : '<tr><td colspan="9">Sem lançamentos neste período.</td></tr>'}
         </tbody>
@@ -2482,7 +2449,6 @@ async function telaPanorama(alvo) {
             <p id="p-periodo"></p>
           </div>
           <div class="acoes" style="margin:0">
-            <button class="btn pequeno" type="button" id="p-csv">${icone('download')} Exportar CSV</button>
             <a class="btn pequeno" id="p-pdf" href="#" target="_blank">${icone('pdf')} Relatório PDF</a>
           </div>
         </div>
@@ -2533,22 +2499,6 @@ async function telaPanorama(alvo) {
       return;
     }
     if (periodo.de !== de || periodo.ate !== ate) return;
-
-    alvo.querySelector('#p-csv').onclick = () => {
-      if (!r.por_caminhao?.length) {
-        recado('Sem dados para exportar neste período.');
-        return;
-      }
-      baixaCSV(
-        ['Caminhao', 'Apelido', 'Entradas (R$)', 'Saidas (R$)', 'Saldo (R$)', 'Combustivel (R$)', 'Litros', 'Km'],
-        r.por_caminhao.map((c) => [
-          celulaCSV(c.placa), celulaCSV(c.apelido), reaisCSV(c.entradas_centavos), reaisCSV(c.saidas_centavos),
-          reaisCSV(c.saldo_centavos), reaisCSV(c.combustivel_centavos),
-          String(Number(c.litros) || 0).replace('.', ','), String(Number(c.km_rodados) || 0),
-        ]),
-        `panorama-caminhoes-${de}-a-${ate}.csv`
-      );
-    };
 
     const saldo = r.atual.saldo_centavos;
     const saldoAnterior = r.anterior.saldo_centavos;
@@ -2698,7 +2648,7 @@ async function telaPanorama(alvo) {
                       <td class="${mSaldo >= 0 ? 'positivo' : 'negativo'}">
                         <strong>${mSaldo >= 0 ? '+' : '−'}${dinheiro(Math.abs(mSaldo))}</strong>
                       </td>
-                      <td>${mMargem !== null ? `${mMargem}%` : '—'}</td>
+                      <td>${mMargem !== null ? `${mMargem}%` : '-'}</td>
                       <td>${m.qtd}</td>
                     </tr>`;
                   }).join('')}
@@ -2837,7 +2787,7 @@ async function telaAjustes(alvo) {
       <div class="titulo-secao">
         <div>
           <h1>${admin ? 'Ajustes & Gestão da Frota' : 'Meu Perfil & Acesso'}</h1>
-          <p>${esc(estado.usuario.nome)} — <strong style="color:var(--primaria)">${admin ? 'Proprietário' : 'Motorista'}</strong></p>
+          <p>${esc(estado.usuario.nome)} - <strong style="color:var(--primaria)">${admin ? 'Proprietário' : 'Motorista'}</strong></p>
         </div>
       </div>
 
@@ -2917,11 +2867,11 @@ async function telaAjustes(alvo) {
         <div class="linha duas">
           <div class="campo">
             <label for="s-atual">Senha atual</label>
-            <input id="s-atual" name="senha_atual" type="password" required autocomplete="current-password" placeholder="Digite sua senha atual">
+            ${campoSenha('s-atual', 'senha_atual', 'required autocomplete="current-password" placeholder="Digite sua senha atual"')}
           </div>
           <div class="campo">
             <label for="s-nova">Nova senha</label>
-            <input id="s-nova" name="senha_nova" type="password" required autocomplete="new-password" placeholder="Digite a nova senha">
+            ${campoSenha('s-nova', 'senha_nova', 'required autocomplete="new-password" placeholder="Digite a nova senha"')}
           </div>
         </div>
         <div class="acoes" style="margin-top:14px">
@@ -2931,7 +2881,7 @@ async function telaAjustes(alvo) {
 
       <div class="cartao">
         <div style="display:flex;align-items:center;gap:12px">
-          <div style="font-size:1.5rem">📱</div>
+          <div class="icone-kpi azul icone-instalar">${icone('celular')}</div>
           <div>
             <h2 style="margin:0 0 2px">Instalar Aplicativo no Celular</h2>
             <p class="ajuda" style="margin:0">
@@ -2994,7 +2944,7 @@ async function telaAjustes(alvo) {
                 <div class="avatar-usuario-ajustes">${iniciais(u.nome)}</div>
                 <div class="dados-entidade-ajustes">
                   <strong>${esc(u.nome)} ${ehProprio ? '<small style="color:var(--primaria)">(Você)</small>' : ''}</strong>
-                  <small>@${esc(u.usuario)}${u.telefone ? ` • 📞 ${esc(u.telefone)}` : ''}${u.valor_diaria_centavos
+                  <small>@${esc(u.usuario)}${u.telefone ? ` • Tel. ${esc(u.telefone)}` : ''}${u.valor_diaria_centavos
                     ? ` • Diária ${dinheiro(u.valor_diaria_centavos)}` : ''}</small>
                   <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
                     <span class="badge-status ${isAdmin ? 'aberta' : 'encerrada'}">
@@ -3189,8 +3139,8 @@ function formUsuario(u, aoConcluir) {
       <div class="campo">
         <label for="u-senha">${novo ? 'Senha de acesso' : 'Nova senha'}</label>
         ${novo ? '' : '<p class="dica">Deixe em branco para manter a senha cadastrada.</p>'}
-        <input id="u-senha" name="${novo ? 'senha' : 'senha_nova'}" ${novo ? 'required' : ''}
-               autocomplete="new-password" placeholder="${novo ? 'Mínimo de 4 dígitos' : 'Digite para redefinir'}">
+        ${campoSenha('u-senha', novo ? 'senha' : 'senha_nova',
+          `${novo ? 'required' : ''} autocomplete="new-password" placeholder="${novo ? 'Mínimo de 4 dígitos' : 'Digite para redefinir'}"`)}
       </div>
       <div class="linha duas">
         <div class="campo">
@@ -3453,7 +3403,7 @@ function opcoesPagamento(selecionado) {
 
 function rotuloViagem(v) {
   return `${v.origem} → ${v.destino}${v.inicio ? ` (saída ${dataDiaMes(v.inicio)})` : ''}`
-    + `${ehAdmin() && v.motorista ? ` — ${v.motorista}` : ''}`;
+    + `${ehAdmin() && v.motorista ? ` - ${v.motorista}` : ''}`;
 }
 
 function cartaoKpi(cor, ico, rotulo, valor, subtexto, classeValor = '') {
@@ -3482,7 +3432,7 @@ function aoTocar(raiz, seletor, acao) {
 // ---------------------------------------------------------------------------
 
 function seloSituacao(r) {
-  if (r.situacao === 'recebido') return '<span class="badge-status aberta">✓ Recebido</span>';
+  if (r.situacao === 'recebido') return '<span class="badge-status aberta">Recebido</span>';
   if (r.vencido) {
     return `<span class="badge-status vencido">${r.situacao === 'parcial' ? 'Parte recebida · ' : ''}Vencido</span>`;
   }
@@ -3623,7 +3573,7 @@ async function abreRecebivel(id, aoConcluir) {
     ['Data do frete', dataCurta(r.data)],
     ['Vencimento', r.vencimento ? dataCurta(r.vencimento) : null],
     ['Viagem', r.viagem_origem ? `${r.viagem_origem} → ${r.viagem_destino}` : null],
-    ['Caminhão', r.placa ? `${r.placa}${r.caminhao_apelido ? ` — ${r.caminhao_apelido}` : ''}` : null],
+    ['Caminhão', r.placa ? `${r.placa}${r.caminhao_apelido ? ` - ${r.caminhao_apelido}` : ''}` : null],
     ['Nota fiscal', r.nota_fiscal_id ? `NF ${r.nota_numero || 'sem número'}` : null],
     ['Último recebimento', r.ultimo_recebimento ? dataCurta(r.ultimo_recebimento) : null],
     ['Observação', r.observacao],
@@ -3764,7 +3714,7 @@ async function formRecebivel(r, aoConcluir, base = {}) {
           <option value="">Sem nota</option>
           ${listaNotas.map((n) => `
             <option value="${n.id}" ${Number(v.nota_fiscal_id) === Number(n.id) ? 'selected' : ''}>
-              NF ${esc(n.numero || 'sem número')}${n.cliente ? ` — ${esc(n.cliente)}` : ''}${n.data ? ` (${dataCurta(n.data)})` : ''}
+              NF ${esc(n.numero || 'sem número')}${n.cliente ? ` - ${esc(n.cliente)}` : ''}${n.data ? ` (${dataCurta(n.data)})` : ''}
             </option>`).join('')}
         </select>
       </div>
@@ -3807,7 +3757,7 @@ async function formRecebivel(r, aoConcluir, base = {}) {
 }
 
 function formRecebimento(r, aoConcluir) {
-  const { elemento, fechar } = janela(`Pagamento — ${r.cliente}`, `
+  const { elemento, fechar } = janela(`Pagamento - ${r.cliente}`, `
     <form class="form-pilha" novalidate>
       <p class="aviso info" style="margin:0">
         Falta receber <strong>${dinheiro(r.restante_centavos)}</strong> de ${dinheiro(r.valor_centavos)}.
@@ -3871,7 +3821,7 @@ function itemNota(n) {
       <div class="icone-lancamento nota">${icone(ehPdf(n.arquivo) ? 'pdf' : 'nota')}</div>
       <div class="info-lancamento">
         <div class="topo-lancamento">
-          <span class="nome-lancamento">NF ${esc(n.numero || 'sem número')}${n.cliente ? ` — ${esc(n.cliente)}` : ''}</span>
+          <span class="nome-lancamento">NF ${esc(n.numero || 'sem número')}${n.cliente ? ` - ${esc(n.cliente)}` : ''}</span>
           ${n.placa ? `<span class="badge-placa">${esc(n.placa)}</span>` : ''}
           ${seloPrazo(n)}
           ${ehAdmin() && n.recebivel_id ? '<span class="tag-status-visivel">No a receber</span>' : ''}
@@ -3969,7 +3919,7 @@ function abreNota(n, aoConcluir) {
     ['Emissão', dataCurta(n.data)],
     ['Valor', n.valor_centavos != null ? dinheiro(n.valor_centavos) : null],
     ['Viagem', n.viagem_origem ? `${n.viagem_origem} → ${n.viagem_destino}` : null],
-    ['Caminhão', n.placa ? `${n.placa}${n.caminhao_apelido ? ` — ${n.caminhao_apelido}` : ''}` : null],
+    ['Caminhão', n.placa ? `${n.placa}${n.caminhao_apelido ? ` - ${n.caminhao_apelido}` : ''}` : null],
     ['Enviada por', n.enviado_por],
     ['Observação', n.observacao],
   ].filter(([, v]) => v);
@@ -4399,7 +4349,7 @@ function formDiaria(d, aoConcluir) {
 function formPagamentoDiarias(m, mes, dias, aoConcluir) {
   const gastos = categoriasDoTipo('saida');
   const padrao = gastos.find((c) => /di[aá]ria/i.test(c.nome)) || gastos.find((c) => /sal[aá]rio/i.test(c.nome));
-  const { elemento, fechar } = janela(`Pagar diárias — ${m.nome}`, `
+  const { elemento, fechar } = janela(`Pagar diárias - ${m.nome}`, `
     <form class="form-pilha" novalidate>
       <div class="grade">
         <div class="mini">

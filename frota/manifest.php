@@ -10,10 +10,8 @@ echo json_encode([
     'display' => 'standalone',
     'background_color' => '#f4f6fb',
     'theme_color' => '#4338ca',
-    'icons' => [[
-        'src' => 'assets/icone.svg',
-        'sizes' => 'any',
-        'type' => 'image/svg+xml',
-        'purpose' => 'any',
-    ]],
+    'icons' => [
+        ['src' => 'assets/logo.png', 'sizes' => '192x192', 'type' => 'image/png', 'purpose' => 'any'],
+        ['src' => 'assets/logo-512.png', 'sizes' => '512x512', 'type' => 'image/png', 'purpose' => 'any'],
+    ],
 ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);

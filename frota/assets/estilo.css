@@ -2876,3 +2876,79 @@ body.tela-entrada {
 .lista-atalhos-periodo .item-atalho-periodo .ico-linha { width: 18px; height: 18px; }
 
 .item-mini-hero.clicavel:hover { opacity: 0.85; }
+
+/* ==========================================================================
+   LOGO DA EMPRESA NA MARCA, SENHA COM OLHO, LOGIN
+   ========================================================================== */
+.icone-frota {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.barra-lateral .icone-frota,
+.icone-frota-movel {
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.barra-lateral .icone-frota { width: 42px; height: 42px; }
+.icone-frota-movel { width: 34px; height: 34px; }
+
+.icone-frota img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.tela-login .logo {
+  width: 72px;
+  height: 72px;
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.tela-login .botao-entrar { margin-top: 20px; }
+
+.caixa-senha {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.caixa-senha input { padding-right: 44px; }
+
+.caixa-senha .revelar-senha {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--tinta-3);
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.caixa-senha .revelar-senha:hover { color: var(--tinta); background: var(--superficie-2); }
+.caixa-senha .revelar-senha .ico-linha { width: 18px; height: 18px; }
+
+.icone-instalar {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  background: var(--azul-suave);
+  color: var(--azul-hover);
+}
+
+.tela-login .campo + .campo { margin-top: 14px; }

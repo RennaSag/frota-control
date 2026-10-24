@@ -884,7 +884,7 @@ function filtroAvisos(array $eu): array
 
 function resumoDoLancamento(array $l): string
 {
-    return $l['categoria'] . ($l['descricao'] ? ' — ' . $l['descricao'] : '')
+    return $l['categoria'] . ($l['descricao'] ? ' - ' . $l['descricao'] : '')
         . ' · ' . pdfReais((int) $l['valor_centavos']) . ' · ' . pdfData($l['data']);
 }
 
@@ -1233,7 +1233,7 @@ function rotaPdfPanorama(): void
     $pdf->indicadores(array_merge([
         ['Combustível', pdfReais($d['combustivel_centavos']), PDF_TINTA],
         ['Litros', pdfNumero($litros, 2), PDF_TINTA],
-        ['Preço médio do litro', $litros > 0 ? pdfReais((int) round($d['combustivel_centavos'] / $litros)) : '—', PDF_TINTA],
+        ['Preço médio do litro', $litros > 0 ? pdfReais((int) round($d['combustivel_centavos'] / $litros)) : '-', PDF_TINTA],
         ['A receber hoje', pdfReais($d['a_receber']['a_receber_centavos']), PDF_TINTA],
     ], $varios ? [
         ['Saldo médio por mês', pdfReais((int) round($a['saldo_centavos'] / $comMovimento)),
@@ -1270,15 +1270,15 @@ function rotaPdfPanorama(): void
             $litros = (float) $c['litros'];
             $km = (int) $c['km_rodados'];
             return [
-                $c['placa'] . ($c['apelido'] ? ' — ' . $c['apelido'] : ''),
+                $c['placa'] . ($c['apelido'] ? ' - ' . $c['apelido'] : ''),
                 pdfReais((int) $c['entradas_centavos']),
                 pdfReais((int) $c['saidas_centavos']),
                 [pdfReais($c['saldo_centavos']), pdfCorSaldo($c['saldo_centavos'])],
                 pdfReais((int) $c['combustivel_centavos']),
-                $litros ? pdfNumero($litros, 2) : '—',
-                $litros ? pdfReais((int) round($c['combustivel_centavos'] / $litros)) : '—',
-                $km ? pdfNumero($km) : '—',
-                $km && $litros ? pdfNumero($km / $litros, 2) : '—',
+                $litros ? pdfNumero($litros, 2) : '-',
+                $litros ? pdfReais((int) round($c['combustivel_centavos'] / $litros)) : '-',
+                $km ? pdfNumero($km) : '-',
+                $km && $litros ? pdfNumero($km / $litros, 2) : '-',
             ];
         }, $d['por_caminhao'])
     );
@@ -1290,7 +1290,7 @@ function rotaPdfPanorama(): void
                 (string) $i['nome'],
                 (string) $i['qtd'],
                 pdfReais((int) $i['total_centavos']),
-                $total ? pdfNumero($i['total_centavos'] / $total * 100, 1) . '%' : '—',
+                $total ? pdfNumero($i['total_centavos'] / $total * 100, 1) . '%' : '-',
             ], $itens)
         );
     };
@@ -1614,7 +1614,7 @@ function dadosNota(array $corpo): array
 
 function resumoDaNota(array $n): string
 {
-    return 'NF ' . ($n['numero'] ?: 'sem número') . ($n['cliente'] ? ' — ' . $n['cliente'] : '')
+    return 'NF ' . ($n['numero'] ?: 'sem número') . ($n['cliente'] ? ' - ' . $n['cliente'] : '')
         . ($n['valor_centavos'] !== null ? ' · ' . pdfReais((int) $n['valor_centavos']) : '')
         . ' · ' . pdfData($n['data']);
 }
