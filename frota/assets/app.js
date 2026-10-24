@@ -13,6 +13,7 @@ const estado = {
   caminhoes: [],
   usuarios: [],
   viagensAbertas: [],
+  recebiveisAbertos: [],
   mes: hoje().slice(0, 7),
   filtros: {
     de: `${hoje().slice(0, 7)}-01`,
@@ -107,7 +108,12 @@ const ICONES_SVG = {
   sair: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
   telefone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
   celular: '<rect x="5" y="2" width="14" height="20" rx="2" ry="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
-  relogio: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>'
+  relogio: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  nota: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h4"/>',
+  calendario: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/>',
+  receita: '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>',
+  aReceber: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>',
+  maisOpcoes: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
 };
 
 function icone(nome, extraClasse = '') {
@@ -155,6 +161,13 @@ function exportarCSV(itens, nomeArquivo = 'lancamentos.csv') {
     `"${(l.pagamento || '').replace(/"/g, '""')}"`,
     `"${(l.observacao || '').replace(/"/g, '""')}"`,
   ]);
+  baixaCSV(cabecalhos, linhas, nomeArquivo);
+}
+
+const celulaCSV = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+const reaisCSV = (centavos) => ((Number(centavos) || 0) / 100).toFixed(2).replace('.', ',');
+
+function baixaCSV(cabecalhos, linhas, nomeArquivo) {
   const csvTexto = '\uFEFF' + [cabecalhos.join(';'), ...linhas.map((row) => row.join(';'))].join('\r\n');
   const blob = new Blob([csvTexto], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -172,8 +185,6 @@ const LOGO = '<img src="assets/logo.png" alt="" width="192" height="192">';
 
 function endereco(rota, params = {}) {
   const p = new URLSearchParams({ r: rota });
-  const token = localStorage.getItem('frota_token');
-  if (token) p.set('token', token);
   for (const [chave, valor] of Object.entries(params)) {
     if (valor !== undefined && valor !== null && valor !== '') p.set(chave, valor);
   }
@@ -181,19 +192,16 @@ function endereco(rota, params = {}) {
 }
 
 async function api(metodo, rota, params = {}, corpo = null) {
-  const token = localStorage.getItem('frota_token');
   const resposta = await fetch(endereco(rota, params), {
     method: metodo,
     headers: {
       'X-App-Frota': '1',
-      ...(token ? { 'Authorization': `Bearer ${token}`, 'X-Frota-Token': token } : {}),
       ...(corpo ? { 'Content-Type': 'application/json' } : {}),
     },
-    credentials: 'include',
+    credentials: 'same-origin',
     body: corpo ? JSON.stringify(corpo) : undefined,
   });
   if (resposta.status === 401 && estado.usuario) {
-    localStorage.removeItem('frota_token');
     estado.usuario = null;
     telaLogin('Sua sessão expirou. Entre novamente.');
     throw new Error('Sessão expirada.');
@@ -203,10 +211,105 @@ async function api(metodo, rota, params = {}, corpo = null) {
   try {
     dados = texto ? JSON.parse(texto) : null;
   } catch {
-    throw new Error('O servidor respondeu de forma inesperada.');
+    throw new Error('O servidor respondeu de forma inesperada. Veja se o PHP está rodando.');
   }
   if (!resposta.ok) throw new Error(dados?.erro || 'Não foi possível concluir.');
   return dados;
+}
+
+// Envia foto ou PDF (nota, cupom, comprovante) e devolve o nome guardado no servidor.
+async function enviaArquivo(arquivo) {
+  const reduzido = await reduzFoto(arquivo);
+  if (reduzido.size > 8 * 1024 * 1024) throw new Error('O arquivo é muito grande (máximo 8 MB).');
+  const corpo = new FormData();
+  corpo.append('foto', reduzido);
+  const resposta = await fetch(endereco('comprovante'), {
+    method: 'POST',
+    headers: { 'X-App-Frota': '1' },
+    credentials: 'same-origin',
+    body: corpo,
+  });
+  let dados = null;
+  try { dados = await resposta.json(); } catch { /* resposta vazia */ }
+  if (!resposta.ok) throw new Error(dados?.erro || 'Não foi possível enviar o arquivo.');
+  return dados.comprovante;
+}
+
+// Liga um <input type="file"> a um campo escondido que guarda o nome do arquivo enviado.
+function ligaArquivo(form, idCampo, nomeOculto, textoVazio) {
+  const campo = form.querySelector(`#${idCampo}`);
+  const nome = form.querySelector(`[data-nome-arquivo="${idCampo}"]`);
+  const aviso = form.querySelector(`[data-aviso-arquivo="${idCampo}"]`);
+  const oculto = form.elements[nomeOculto];
+  if (oculto.value) {
+    aviso.textContent = 'Arquivo já anexado.';
+    aviso.classList.remove('oculto');
+  }
+  campo.addEventListener('change', async () => {
+    const arquivo = campo.files?.[0];
+    if (!arquivo) return;
+    form.querySelector('.aviso.erro')?.remove();
+    nome.textContent = arquivo.name;
+    aviso.textContent = 'Enviando…';
+    aviso.classList.remove('oculto');
+    try {
+      oculto.value = await enviaArquivo(arquivo);
+      aviso.textContent = 'Arquivo anexado.';
+    } catch (erro) {
+      aviso.classList.add('oculto');
+      campo.value = '';
+      nome.textContent = textoVazio;
+      mostraErro(form, erro.message);
+    }
+  });
+}
+
+function campoArquivo(id, rotulo, dica, oculto, valor, textoVazio = 'Nenhum arquivo escolhido') {
+  return `
+    <div class="campo">
+      <label for="${id}">${esc(rotulo)}</label>
+      <p class="dica">${esc(dica)}</p>
+      <label class="arquivo" for="${id}">
+        <span class="btn pequeno" aria-hidden="true">Escolher arquivo</span>
+        <span data-nome-arquivo="${id}">${esc(textoVazio)}</span>
+      </label>
+      <input id="${id}" class="escondido" type="file" accept="image/*,application/pdf">
+      <input type="hidden" name="${oculto}" value="${esc(valor || '')}">
+      <p class="aviso ok oculto" data-aviso-arquivo="${id}"></p>
+    </div>`;
+}
+
+// Prazo do motorista para corrigir o que registrou (o servidor é quem decide; aqui só mostra).
+const MINUTOS_PARA_CORRIGIR = 5;
+
+function textoPrazo(segundos) {
+  const min = Math.max(1, Math.ceil(Number(segundos) / 60));
+  return `Você pode corrigir ou excluir por mais ${min} ${min === 1 ? 'minuto' : 'minutos'}. Depois, só o proprietário.`;
+}
+
+function avisoPrazo(registro) {
+  if (ehAdmin()) return '';
+  if (registro.pode_alterar) {
+    return `<p class="aviso info" data-prazo>${icone('relogio')} ${esc(textoPrazo(registro.segundos_para_alterar))}</p>`;
+  }
+  return `<p class="ajuda-tempo-expirado" data-prazo>${icone('cadeado')}&nbsp;Passou o prazo de ${MINUTOS_PARA_CORRIGIR} minutos para corrigir. Se precisar mudar algo, fale com o proprietário.</p>`;
+}
+
+// Esconde os botões de editar/excluir quando o prazo acaba com a janela aberta.
+function vigiaPrazo(elemento, registro) {
+  if (ehAdmin() || !registro.pode_alterar) return;
+  setTimeout(() => {
+    if (!elemento.isConnected) return;
+    elemento.querySelectorAll('[data-editar], [data-excluir]').forEach((b) => b.remove());
+    const aviso = elemento.querySelector('[data-prazo]');
+    if (aviso) aviso.outerHTML = avisoPrazo({ pode_alterar: false });
+  }, Number(registro.segundos_para_alterar) * 1000);
+}
+
+function seloPrazo(registro) {
+  if (ehAdmin() || !registro.pode_alterar) return '';
+  const min = Math.max(1, Math.ceil(Number(registro.segundos_para_alterar) / 60));
+  return `<span class="selo-prazo" title="Ainda dá para corrigir">${icone('relogio')} ${min} min</span>`;
 }
 
 function recado(mensagem) {
@@ -294,41 +397,38 @@ function telaLogin(mensagem) {
   aoEnviar(app.querySelector('form'), async (dados) => {
     if (!dados.usuario?.trim() || !dados.senha) throw new Error('Preencha usuário e senha.');
     estado.usuario = await api('POST', 'login', {}, dados);
-    if (estado.usuario?.token) {
-      localStorage.setItem('frota_token', estado.usuario.token);
-    }
     await iniciaApp();
   });
 }
 
+// "curto" é o nome no menu do celular, onde o espaço é pequeno.
 const ABAS_MOTORISTA = [
-  { id: 'meus', ico: 'lista', nome: 'Meus gastos' },
+  { id: 'meus', ico: 'lista', nome: 'Meus gastos', curto: 'Gastos' },
   { id: 'viagens', ico: 'rota', nome: 'Viagens' },
+  { id: 'notas', ico: 'nota', nome: 'Notas fiscais', curto: 'Notas' },
+  { id: 'diarias', ico: 'calendario', nome: 'Minhas diárias', curto: 'Diárias' },
+  { id: 'receita', ico: 'receita', nome: 'Receita da empresa', curto: 'Receita' },
   { id: 'perfil', ico: 'usuario', nome: 'Perfil' },
 ];
 const ABAS_ADMIN = [
   { id: 'panorama', ico: 'panorama', nome: 'Panorama' },
-  { id: 'lancamentos', ico: 'lista', nome: 'Lançamentos' },
+  { id: 'lancamentos', ico: 'lista', nome: 'Lançamentos', curto: 'Lançam.' },
+  { id: 'receber', ico: 'aReceber', nome: 'A receber' },
   { id: 'viagens', ico: 'rota', nome: 'Viagens' },
+  { id: 'diarias', ico: 'calendario', nome: 'Diárias' },
+  { id: 'notas', ico: 'nota', nome: 'Notas fiscais', curto: 'Notas' },
   { id: 'ajustes', ico: 'ajustes', nome: 'Ajustes' },
 ];
+// No celular cabem 4 abas fixas; as outras ficam no botão "Mais".
+const ABAS_NO_DOCK = 4;
 const ehAdmin = () => estado.usuario?.papel === 'admin';
 const abas = () => (ehAdmin() ? ABAS_ADMIN : ABAS_MOTORISTA);
 
 async function iniciaApp() {
   document.body.classList.remove('tela-entrada');
   app.innerHTML = '<p class="carregando">Carregando…</p>';
-  const [categorias, caminhoes, usuarios, viagens] = await Promise.all([
-    api('GET', 'categorias'),
-    api('GET', 'caminhoes'),
-    api('GET', 'usuarios'),
-    api('GET', 'viagens', { status: 'aberta', limite: 100 }),
-  ]);
-  estado.categorias = categorias;
-  estado.caminhoes = caminhoes;
-  estado.usuarios = usuarios;
-  estado.viagensAbertas = viagens;
-  estado.aba = estado.aba || abas()[0].id;
+  await recarregaBasico();
+  if (!abas().some((a) => a.id === estado.aba)) estado.aba = abas()[0].id;
   desenhaEstrutura();
   await abreAba(estado.aba);
 }
@@ -391,16 +491,38 @@ function desenhaEstrutura() {
       </div>
 
       <nav class="dock-flutuante" aria-label="Navegação Rápida">
-        ${abas().map((a) => `
+        ${abasDoDock().fixas.map((a) => `
           <button type="button" data-aba="${a.id}" aria-current="${a.id === estado.aba}">
-            ${svg(a.ico)}<span>${esc(a.nome)}</span>
+            ${svg(a.ico)}<span>${esc(a.curto || a.nome)}</span>
           </button>`).join('')}
+        ${abasDoDock().extras.length ? `
+          <button type="button" id="b-mais-abas" aria-haspopup="dialog"
+                  aria-current="${abasDoDock().extras.some((a) => a.id === estado.aba)}">
+            ${svg('maisOpcoes')}<span>Mais</span>
+          </button>` : ''}
       </nav>
     </div>`;
 
   app.querySelectorAll('[data-aba]').forEach((b) => {
     b.onclick = () => abreAba(b.dataset.aba);
   });
+
+  const bMais = document.getElementById('b-mais-abas');
+  if (bMais) {
+    bMais.onclick = () => {
+      const { elemento, fechar } = janela('Mais opções', `
+        <div class="lista-atalhos-periodo">
+          ${abasDoDock().extras.map((a) => `
+            <button type="button" class="item-atalho-periodo ${a.id === estado.aba ? 'ativo' : ''}" data-ir-aba="${a.id}">
+              <div style="display:flex;align-items:center;gap:10px">${svg(a.ico)}<strong>${esc(a.nome)}</strong></div>
+              ${icone('setaDireita')}
+            </button>`).join('')}
+        </div>`);
+      elemento.querySelectorAll('[data-ir-aba]').forEach((b) => {
+        b.onclick = () => { fechar(); abreAba(b.dataset.irAba); };
+      });
+    };
+  }
 
   const sino = document.getElementById('b-avisos');
   if (sino) sino.onclick = abreAvisos;
@@ -410,7 +532,6 @@ function desenhaEstrutura() {
     bSair.onclick = async () => {
       if (!confirm('Tem certeza de que deseja sair da conta?')) return;
       try { await api('POST', 'logout'); } catch {}
-      localStorage.removeItem('frota_token');
       estado.usuario = null;
       estado.aba = null;
       telaLogin('Você saiu da conta.');
@@ -452,11 +573,19 @@ function desenhaEstrutura() {
   iniciaAvisos();
 }
 
+function abasDoDock() {
+  const todas = abas();
+  if (todas.length <= ABAS_NO_DOCK + 1) return { fixas: todas, extras: [] };
+  return { fixas: todas.slice(0, ABAS_NO_DOCK), extras: todas.slice(ABAS_NO_DOCK) };
+}
+
 async function abreAba(id) {
   estado.aba = id;
   app.querySelectorAll('[data-aba]').forEach((b) => {
     b.setAttribute('aria-current', String(b.dataset.aba === id));
   });
+  document.getElementById('b-mais-abas')?.setAttribute('aria-current',
+    String(abasDoDock().extras.some((a) => a.id === id)));
   const vez = ++estado.versaoAba;
   const alvo = document.createElement('div');
   alvo.innerHTML = '<p class="carregando">Carregando…</p>';
@@ -468,6 +597,10 @@ async function abreAba(id) {
     lancamentos: telaLancamentos,
     viagens: telaViagens,
     panorama: telaPanorama,
+    receber: telaReceber,
+    diarias: telaDiarias,
+    notas: telaNotas,
+    receita: telaReceita,
     ajustes: telaAjustes,
     perfil: telaAjustes,
   };
@@ -485,6 +618,7 @@ async function recarregaBasico() {
     api('GET', 'caminhoes'),
     api('GET', 'usuarios'),
     api('GET', 'viagens', { status: 'aberta', limite: 100 }),
+    ehAdmin() ? recarregaRecebiveisAbertos() : null,
   ]);
   estado.categorias = categorias;
   estado.caminhoes = caminhoes;
@@ -492,13 +626,28 @@ async function recarregaBasico() {
   estado.viagensAbertas = viagens;
 }
 
+// Fretes em aberto, para o proprietário ligar uma entrada ao frete que está sendo pago.
+async function recarregaRecebiveisAbertos() {
+  try {
+    estado.recebiveisAbertos = (await api('GET', 'recebiveis', { status: 'abertos' })).itens;
+  } catch {
+    estado.recebiveisAbertos = [];
+  }
+}
+
 const avisos = { ultimoId: null, timer: null };
 
 const ACOES_AVISO = {
   criou: { saida: 'registrou um gasto', entrada: 'registrou uma entrada' },
-  editou: { saida: 'editou um gasto', entrada: 'editou uma entrada' },
-  excluiu: { saida: 'excluiu um gasto', entrada: 'excluiu uma entrada' },
+  editou: { saida: 'editou um gasto', entrada: 'editou uma entrada', nota: 'editou uma nota fiscal' },
+  excluiu: {
+    saida: 'excluiu um gasto', entrada: 'excluiu uma entrada',
+    nota: 'excluiu uma nota fiscal', diaria: 'excluiu uma diária',
+  },
   abriu: { viagem: 'abriu uma viagem' },
+  enviou: { nota: 'enviou uma nota fiscal' },
+  registrou: { diaria: 'registrou dias trabalhados' },
+  pagou: { diaria: 'pagou suas diárias' },
 };
 
 function textoAviso(a) {
@@ -520,7 +669,7 @@ function mostraContador(n) {
   contador.textContent = n > 99 ? '99+' : String(n);
   contador.classList.toggle('oculto', !n);
   document.getElementById('b-avisos').setAttribute('aria-label',
-    n ? `Avisos dos motoristas: ${n} ${n === 1 ? 'novo' : 'novos'}` : 'Avisos dos motoristas');
+    n ? `Avisos: ${n} ${n === 1 ? 'novo' : 'novos'}` : 'Avisos');
 }
 
 async function notificaAparelho(texto) {
@@ -585,6 +734,8 @@ async function abreAvisos() {
   function iconeAviso(a) {
     if (a.tipo === 'entrada') return icone('receber');
     if (a.tipo === 'viagem') return icone('caminhao');
+    if (a.tipo === 'nota') return icone('nota');
+    if (a.tipo === 'diaria') return icone('calendario');
     if (a.acao === 'editou') return icone('editar');
     if (a.acao === 'excluiu') return icone('lixeira');
     if (a.resumo && /diesel|litro|abastec/i.test(a.resumo)) return icone('combustivel');
@@ -610,7 +761,7 @@ async function abreAvisos() {
       <div class="lista-notificacoes-elevada">
         ${filtrados.map((a) => {
           const ehEntrada = a.tipo === 'entrada';
-          const ehViagem = a.tipo === 'viagem';
+          const ehViagem = ['viagem', 'nota', 'diaria'].includes(a.tipo);
           const ehExclusao = a.acao === 'excluiu';
           const corClasse = ehEntrada ? 'entrada' : (ehViagem ? 'viagem' : (ehExclusao ? 'exclusao' : 'saida'));
           const eNova = naoLidosOriginais.has(a.id);
@@ -757,6 +908,14 @@ function opcoesMotorista(selecionado) {
     </option>`).join('');
 }
 
+function opcoesRecebivel(selecionado, extra) {
+  return comOExtra(estado.recebiveisAbertos, extra).map((r) => `
+    <option value="${r.id}" ${Number(selecionado) === Number(r.id) ? 'selected' : ''}>
+      ${esc(r.cliente)}${r.descricao ? ` — ${esc(r.descricao)}` : ''}${r.restante_centavos != null
+        ? ` (falta ${dinheiro(r.restante_centavos)})` : ''}
+    </option>`).join('');
+}
+
 function categoriasDoTipo(tipo) {
   return estado.categorias.filter((c) => c.tipo === tipo);
 }
@@ -880,6 +1039,17 @@ function camposLancamento(tipo, l = {}) {
     </div>
     <p class="aviso info oculto" data-se="preco-litro"></p>
 
+    ${entrada && ehAdmin() ? `
+      <div class="campo opcional">
+        <label for="c-recebivel">É pagamento de um frete a receber?</label>
+        <p class="dica">Escolha o frete para abater do que o cliente ainda deve.</p>
+        <select id="c-recebivel" name="recebivel_id">
+          <option value="">Não, é uma entrada avulsa</option>
+          ${opcoesRecebivel(l.recebivel_id, l.recebivel_id
+            ? { id: l.recebivel_id, cliente: l.recebivel_cliente, descricao: l.recebivel_descricao } : null)}
+        </select>
+      </div>` : ''}
+
     ${entrada ? `
       <div class="campo opcional">
         <label for="c-cliente">Quem pagou</label>
@@ -995,29 +1165,8 @@ function ligaCamposLancamento(form) {
     nomeFoto.textContent = campoFoto.files[0].name;
     avisoFoto.textContent = 'Enviando foto…';
     avisoFoto.classList.remove('oculto');
-    const arquivo = await reduzFoto(campoFoto.files[0]);
-    if (arquivo.size > 8 * 1024 * 1024) {
-      avisoFoto.classList.add('oculto');
-      mostraErro(form, 'A foto é muito grande (máximo 8 MB).');
-      limpaFoto();
-      return;
-    }
     try {
-      const corpo = new FormData();
-      corpo.append('foto', arquivo);
-      const token = localStorage.getItem('frota_token');
-      const resposta = await fetch(endereco('comprovante'), {
-        method: 'POST',
-        headers: {
-          'X-App-Frota': '1',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-        },
-        credentials: 'include',
-        body: corpo,
-      });
-      const dados = await resposta.json();
-      if (!resposta.ok) throw new Error(dados.erro);
-      form.elements.comprovante.value = dados.comprovante;
+      form.elements.comprovante.value = await enviaArquivo(campoFoto.files[0]);
       avisoFoto.textContent = 'Comprovante anexado.';
     } catch (erro) {
       avisoFoto.classList.add('oculto');
@@ -1030,6 +1179,18 @@ function ligaCamposLancamento(form) {
     avisoFoto.textContent = 'Comprovante já anexado.';
     avisoFoto.classList.remove('oculto');
   }
+
+  // Ao escolher o frete a receber, já preenche quem pagou e o tipo de frete.
+  form.elements.recebivel_id?.addEventListener('change', () => {
+    const r = estado.recebiveisAbertos.find((x) => Number(x.id) === Number(form.elements.recebivel_id.value));
+    if (!r) return;
+    if (form.elements.cliente && !form.elements.cliente.value) form.elements.cliente.value = r.cliente;
+    const botao = form.querySelector(`.opcao-categoria[data-id="${r.categoria_id}"]`);
+    if (botao) selecionaCategoria(botao);
+    if (!form.elements.valor.value && r.restante_centavos) {
+      form.elements.valor.value = (r.restante_centavos / 100).toFixed(2).replace('.', ',');
+    }
+  });
 
   ligaNovaViagem(form);
 }
@@ -1143,7 +1304,7 @@ function abreFormLancamento(tipoInicial, lancamento, aoConcluir) {
           const novoTipo = btn.dataset.tipoOpcao;
           if (novoTipo === tipoAtual) return;
           tipoAtual = novoTipo;
-          const h2 = elemento.querySelector('h2');
+          const h2 = elemento.closest('.conteudo')?.querySelector('h2');
           if (h2) h2.textContent = tipoAtual === 'entrada' ? 'Novo Frete / Entrada' : 'Novo Gasto / Despesa';
           form.innerHTML = renderConteudo();
           ligaEventosForm();
@@ -1159,7 +1320,10 @@ function abreFormLancamento(tipoInicial, lancamento, aoConcluir) {
     if (lancamento) await api('PUT', 'lancamento', { id: lancamento.id }, dados);
     else await api('POST', 'lancamentos', {}, dados);
     fechar();
-    recado(lancamento ? 'Lançamento atualizado.' : 'Lançamento registrado com sucesso!');
+    if (lancamento) recado('Lançamento atualizado.');
+    else if (ehAdmin()) recado('Lançamento registrado com sucesso!');
+    else recado(`Gasto salvo. Se errou algo, dá para corrigir nos próximos ${MINUTOS_PARA_CORRIGIR} minutos.`);
+    if (ehAdmin() && tipoAtual === 'entrada') await recarregaRecebiveisAbertos();
     await aoConcluir?.();
   });
 }
@@ -1187,7 +1351,7 @@ async function telaNovoGasto(alvo) {
     validaLancamento(dados, 'saida');
     await api('POST', 'lancamentos', {}, dados);
     localStorage.setItem('ultimo_caminhao', dados.caminhao_id || '');
-    recado('Gasto salvo.');
+    recado(`Gasto salvo. Se errou algo, dá para corrigir nos próximos ${MINUTOS_PARA_CORRIGIR} minutos.`);
     const guardar = {
       data: dados.data,
       caminhao_id: dados.caminhao_id,
@@ -1211,12 +1375,13 @@ async function mostraResumoHoje() {
     <div class="cartao">
       <h2>Registrado hoje</h2>
       <p class="ajuda">${r.qtd} ${r.qtd === 1 ? 'gasto' : 'gastos'} — total ${dinheiro(r.saidas_centavos)}</p>
-      <div class="lista">${r.itens.map(itemLancamento).join('')}</div>
+      <div class="lista">${r.itens.map((l) => itemLancamento(l)).join('')}</div>
     </div>`;
   ligaItens(caixa);
 }
 
-function itemLancamento(l) {
+// somenteLeitura: linha sem clique (ex.: receita da empresa vista pelo motorista).
+function itemLancamento(l, somenteLeitura = false) {
   const entrada = l.tipo === 'entrada';
   const dataFormatada = dataCurta(l.data);
   const placa = l.placa ? `<span class="badge-placa">${esc(l.placa)}</span>` : '';
@@ -1229,7 +1394,8 @@ function itemLancamento(l) {
   const metaDetalhes = [motorista, rota, litros, precoLitro, cliente].filter(Boolean).join('<span class="separador-ponto">·</span>');
 
   return `
-    <div class="item-lancamento-moderno" data-lancamento="${l.id}" role="button" tabindex="0">
+    <div class="item-lancamento-moderno ${somenteLeitura ? 'somente-leitura' : ''}"
+         ${somenteLeitura ? '' : `data-lancamento="${l.id}" role="button" tabindex="0"`}>
       <div class="icone-lancamento ${entrada ? 'entrada' : 'saida'}">
         ${entrada ? icone('receber') : (l.litros ? icone('combustivel') : icone('gasto'))}
       </div>
@@ -1237,6 +1403,7 @@ function itemLancamento(l) {
         <div class="topo-lancamento">
           <span class="nome-lancamento">${esc(l.descricao || l.categoria)}</span>
           ${placa}
+          ${seloPrazo(l)}
         </div>
         <div class="meta-lancamento">
           <span>${dataFormatada}</span>
@@ -1247,7 +1414,7 @@ function itemLancamento(l) {
         <span class="quantia ${entrada ? 'entrada' : 'saida'}">
           ${entrada ? '+' : '−'}&nbsp;${dinheiro(l.valor_centavos)}
         </span>
-        <span class="seta-acao">${icone('setaDireita')}</span>
+        ${somenteLeitura ? '' : `<span class="seta-acao">${icone('setaDireita')}</span>`}
       </div>
     </div>`;
 }
@@ -1458,7 +1625,7 @@ async function telaLancamentos(alvo) {
           <span>VALOR (R$)</span>
         </div>
         <div class="lista" id="itens-container">
-          ${itensCarregados.map(itemLancamento).join('')}
+          ${itensCarregados.map((l) => itemLancamento(l)).join('')}
         </div>
       </div>`;
     ligaItens(caixaLista);
@@ -1604,6 +1771,8 @@ async function abreLancamento(id) {
     ['Preço por litro', l.litros ? dinheiro(l.valor_centavos / l.litros) : null],
     ['Km do painel', l.km ? numero(l.km) : null],
     ['Quem pagou', l.cliente],
+    ['Frete a receber', l.recebivel_cliente
+      ? `${l.recebivel_cliente}${l.recebivel_descricao ? ` — ${l.recebivel_descricao}` : ''}` : null],
     [entrada ? 'Cidade / local' : 'Onde foi', l.lugar],
     [entrada ? 'Como recebeu' : 'Como pagou', l.pagamento],
     ['Observação', l.observacao],
@@ -1625,23 +1794,35 @@ async function abreLancamento(id) {
              target="_blank" rel="noopener">Ver comprovante</a>
         </p>` : ''}
     </div>
-    <div class="acoes fim" style="margin-top:16px">
-      <button class="btn perigo" type="button" data-excluir>Excluir</button>
-      <button class="btn principal" type="button" data-editar>Editar</button>
-    </div>`);
+    ${avisoPrazo(l)}
+    ${l.pode_alterar ? `
+      <div class="acoes fim" style="margin-top:16px">
+        <button class="btn perigo" type="button" data-excluir>Excluir</button>
+        <button class="btn principal" type="button" data-editar>Editar</button>
+      </div>` : ''}`);
 
+  vigiaPrazo(elemento, l);
   const recarrega = () => abreAba(estado.aba);
-  elemento.querySelector('[data-editar]').onclick = () => {
+  elemento.querySelector('[data-editar]')?.addEventListener('click', () => {
     fechar();
     abreFormLancamento(l.tipo, l, recarrega);
-  };
-  elemento.querySelector('[data-excluir]').onclick = async () => {
-    if (!confirm('Excluir este lançamento? Não dá para desfazer.')) return;
-    await api('DELETE', 'lancamento', { id: l.id });
+  });
+  elemento.querySelector('[data-excluir]')?.addEventListener('click', async () => {
+    const pagamentoDeDiarias = /^Diárias de /.test(l.descricao || '');
+    if (!confirm(pagamentoDeDiarias
+      ? 'Excluir este pagamento? As diárias pagas por ele voltam a ficar pendentes.'
+      : 'Excluir este lançamento? Não dá para desfazer.')) return;
+    try {
+      await api('DELETE', 'lancamento', { id: l.id });
+    } catch (erro) {
+      recado(erro.message);
+      return;
+    }
     fechar();
     recado('Lançamento excluído.');
+    if (ehAdmin()) await recarregaRecebiveisAbertos();
     await recarrega();
-  };
+  });
 }
 
 async function telaViagens(alvo) {
@@ -1696,6 +1877,7 @@ async function telaViagens(alvo) {
               ${v.placa ? `<span class="separador-ponto">·</span><span class="badge-placa">${esc(v.placa)}</span>` : ''}
               ${ehAdmin() && v.motorista ? `<span class="separador-ponto">·</span><span>${esc(v.motorista)}</span>` : ''}
               ${km != null ? `<span class="separador-ponto">·</span><span>${numero(km)} km rodados</span>` : ''}
+              ${seloPrazo(v)}
             </div>
 
             <div class="metricas-viagem">
@@ -1874,21 +2056,42 @@ async function abreViagem(v, aoConcluir) {
     ${r.qtd ? `
       <div class="cartao" style="margin-top:14px">
         <h2>Lançamentos desta viagem</h2>
-        <div class="lista">${r.itens.map(itemLancamento).join('')}</div>
+        <div class="lista">${r.itens.map((l) => itemLancamento(l)).join('')}</div>
       </div>` : `
       <div class="vazio" style="margin-top:14px">Nenhum lançamento nesta viagem ainda.</div>`}
+    ${ehAdmin() ? '' : avisoPrazo(v)}
     <div class="acoes fim" style="margin-top:16px">
       ${ehAdmin() ? '<button class="btn perigo" type="button" data-excluir>Excluir</button>' : ''}
-      <button class="btn" type="button" data-editar>Editar</button>
+      ${ehAdmin() ? `
+        <button class="btn" type="button" data-diarias-viagem title="Uma diária por dia da viagem para o motorista">
+          ${icone('calendario')} Lançar diárias
+        </button>` : ''}
+      ${v.pode_alterar ? '<button class="btn" type="button" data-editar>Editar</button>' : ''}
       ${v.status === 'aberta' ? `
         <button class="btn principal" type="button" data-encerrar>Encerrar viagem</button>` : ''}
     </div>`);
 
   ligaItens(elemento);
-  elemento.querySelector('[data-editar]').onclick = () => {
+  vigiaPrazo(elemento, v);
+  elemento.querySelector('[data-editar]')?.addEventListener('click', () => {
     fechar();
     abreFormViagem(v, aoConcluir);
-  };
+  });
+  elemento.querySelector('[data-diarias-viagem]')?.addEventListener('click', async () => {
+    const ate = v.fim || hoje();
+    if (!confirm(`Lançar uma diária para ${v.motorista} em cada dia de ${dataCurta(v.inicio)} a ${dataCurta(ate)}?\n`
+      + 'Dias que já têm diária são pulados. O valor é a diária cadastrada para o motorista.')) return;
+    try {
+      const r2 = await api('POST', 'diarias', {}, {
+        usuario_id: v.usuario_id, de: v.inicio, ate, viagem_id: v.id,
+      });
+      recado(r2.criadas
+        ? `${r2.criadas} ${r2.criadas === 1 ? 'diária lançada' : 'diárias lançadas'}${r2.ja_existiam ? ` (${r2.ja_existiam} já existiam)` : ''}.`
+        : 'Todos esses dias já tinham diária.');
+    } catch (erro) {
+      recado(erro.message);
+    }
+  });
   elemento.querySelector('[data-encerrar]')?.addEventListener('click', () => {
     fechar();
     const j = janela('Encerrar viagem', `
@@ -2332,13 +2535,19 @@ async function telaPanorama(alvo) {
     if (periodo.de !== de || periodo.ate !== ate) return;
 
     alvo.querySelector('#p-csv').onclick = () => {
-      if (r && r.por_caminhao && r.por_caminhao.length) {
-        exportarCSV(r.por_caminhao, `panorama-caminhoes-${de}-${ate}.csv`);
-      } else if (r && r.meses && r.meses.length) {
-        exportarCSV(r.meses, `panorama-meses-${de}-${ate}.csv`);
-      } else {
+      if (!r.por_caminhao?.length) {
         recado('Sem dados para exportar neste período.');
+        return;
       }
+      baixaCSV(
+        ['Caminhao', 'Apelido', 'Entradas (R$)', 'Saidas (R$)', 'Saldo (R$)', 'Combustivel (R$)', 'Litros', 'Km'],
+        r.por_caminhao.map((c) => [
+          celulaCSV(c.placa), celulaCSV(c.apelido), reaisCSV(c.entradas_centavos), reaisCSV(c.saidas_centavos),
+          reaisCSV(c.saldo_centavos), reaisCSV(c.combustivel_centavos),
+          String(Number(c.litros) || 0).replace('.', ','), String(Number(c.km_rodados) || 0),
+        ]),
+        `panorama-caminhoes-${de}-a-${ate}.csv`
+      );
     };
 
     const saldo = r.atual.saldo_centavos;
@@ -2387,6 +2596,12 @@ async function telaPanorama(alvo) {
             <div class="item-mini-hero">
               <span class="rotulo">Custos & Gastos Totais</span>
               <span class="valor" style="color:#fb7185">${dinheiro(r.atual.saidas_centavos)}</span>
+            </div>
+            <div class="item-mini-hero clicavel" id="kpi-a-receber" role="button" tabindex="0" title="Ver fretes a receber">
+              <span class="rotulo">A receber dos clientes ›</span>
+              <span class="valor" style="color:#fcd34d">${dinheiro(r.a_receber.a_receber_centavos)}</span>
+              ${r.a_receber.vencido_centavos
+                ? `<span class="rotulo" style="color:#fda4af">${dinheiro(r.a_receber.vencido_centavos)} vencido</span>` : ''}
             </div>
             <div class="item-mini-hero">
               <span class="rotulo">Total de Lançamentos</span>
@@ -2517,6 +2732,10 @@ async function telaPanorama(alvo) {
           ${barras(r.por_motorista, (i) => esc(i.nome))}
         </div>
       </div>`;
+
+    const kpiReceber = painel.querySelector('#kpi-a-receber');
+    kpiReceber.onclick = () => abreAba('receber');
+    kpiReceber.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abreAba('receber'); } };
 
     // Connect Chart Switcher Buttons (Linha, Barras, Pizza)
     painel.querySelectorAll('[data-modo-grafico]').forEach((btn) => {
@@ -2741,7 +2960,6 @@ async function telaAjustes(alvo) {
 
   alvo.querySelector('#b-sair').onclick = async () => {
     try { await api('POST', 'logout'); } catch {}
-    localStorage.removeItem('frota_token');
     estado.usuario = null;
     estado.aba = null;
     telaLogin('Você saiu da conta.');
@@ -2776,7 +2994,8 @@ async function telaAjustes(alvo) {
                 <div class="avatar-usuario-ajustes">${iniciais(u.nome)}</div>
                 <div class="dados-entidade-ajustes">
                   <strong>${esc(u.nome)} ${ehProprio ? '<small style="color:var(--primaria)">(Você)</small>' : ''}</strong>
-                  <small>@${esc(u.usuario)}${u.telefone ? ` • 📞 ${esc(u.telefone)}` : ''}</small>
+                  <small>@${esc(u.usuario)}${u.telefone ? ` • 📞 ${esc(u.telefone)}` : ''}${u.valor_diaria_centavos
+                    ? ` • Diária ${dinheiro(u.valor_diaria_centavos)}` : ''}</small>
                   <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
                     <span class="badge-status ${isAdmin ? 'aberta' : 'encerrada'}">
                       ${isAdmin ? 'Proprietário' : 'Motorista'}
@@ -2865,6 +3084,7 @@ async function telaAjustes(alvo) {
                     </span>
                     ${c.pede_litros ? `<span class="tag-meta combustivel">${icone('combustivel')} Pede Litros</span>` : ''}
                     ${c.pede_descricao ? `<span class="tag-meta">${icone('editar')} Pede Descrição</span>` : ''}
+                    ${Number(c.oculta_motorista) ? `<span class="tag-meta">${icone('olhoOculto')} Só o escritório vê</span>` : ''}
                     <span class="tag-meta">
                       ${qtd ? `${qtd} ${qtd === 1 ? 'lançamento' : 'lançamentos'}` : 'Sem lançamentos'}
                     </span>
@@ -2989,6 +3209,24 @@ function formUsuario(u, aoConcluir) {
           <input id="u-telefone" name="telefone" type="tel" value="${esc(u?.telefone || '')}" placeholder="(00) 00000-0000">
         </div>
       </div>
+      <div class="linha duas">
+        <div class="campo opcional">
+          <label for="u-diaria">Valor da diária</label>
+          <p class="dica">Quanto o motorista recebe por dia trabalhado.</p>
+          <div class="valor-caixa">
+            <span aria-hidden="true">R$</span>
+            <input id="u-diaria" name="valor_diaria" inputmode="decimal" placeholder="0,00"
+                   value="${u?.valor_diaria_centavos ? esc((u.valor_diaria_centavos / 100).toFixed(2).replace('.', ',')) : ''}">
+          </div>
+        </div>
+        <div class="campo opcional">
+          <label for="u-caminhao">Caminhão padrão</label>
+          <p class="dica">Já vem escolhido quando ele lança um gasto.</p>
+          <select id="u-caminhao" name="caminhao_padrao_id">
+            ${opcoesCaminhao(u?.caminhao_padrao_id).replace('Selecione o caminhão', 'Nenhum')}
+          </select>
+        </div>
+      </div>
       ${novo ? '' : `
         <div class="campo">
           <label for="u-ativo">Situação do acesso</label>
@@ -3106,6 +3344,14 @@ function formCategoria(c, aoConcluir) {
         <p class="dica" data-exemplo>${EXEMPLOS_CATEGORIA[tipo]}</p>
         <input id="k-nome" name="nome" required maxlength="40" value="${esc(c?.nome || '')}" placeholder="Ex.: Manutenção Preventiva">
       </div>
+      <div class="campo ${tipo === 'saida' ? '' : 'oculto'}" data-so-gasto>
+        <label class="caixa-marcar">
+          <input type="checkbox" name="oculta_motorista" value="1" ${Number(c?.oculta_motorista) ? 'checked' : ''}>
+          <span>Esconder dos motoristas
+            <small>Para gastos que só o escritório lança, como salário e diárias. O motorista não vê nem usa.</small>
+          </span>
+        </label>
+      </div>
       ${novo ? '' : `
         <div class="campo">
           <label for="k-ativo">Visibilidade ao lançar</label>
@@ -3139,11 +3385,13 @@ function formCategoria(c, aoConcluir) {
       form.querySelectorAll('[data-tipo]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
       form.elements.tipo.value = b.dataset.tipo;
       form.querySelector('[data-exemplo]').textContent = EXEMPLOS_CATEGORIA[b.dataset.tipo];
+      form.querySelector('[data-so-gasto]').classList.toggle('oculto', b.dataset.tipo !== 'saida');
     };
   });
 
   aoEnviar(form, async (dados) => {
     dados.ativo = dados.ativo === undefined ? true : dados.ativo === '1';
+    dados.oculta_motorista = dados.oculta_motorista === '1';
     if (novo) await api('POST', 'categorias', {}, dados);
     else await api('PUT', 'categoria', { id: c.id }, dados);
     fechar();
@@ -3184,6 +3432,1156 @@ async function excluiCategoria(c, aoConcluir) {
   } catch (erro) {
     recado(erro.message);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Utilidades das telas de fretes a receber, notas fiscais, diárias e receita
+// ---------------------------------------------------------------------------
+
+const DIAS_SEMANA = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+
+function diaDaSemana(iso) {
+  return DIAS_SEMANA[new Date(`${String(iso).slice(0, 10)}T12:00:00`).getDay()];
+}
+
+const valorParaCampo = (centavos) => (centavos ? (centavos / 100).toFixed(2).replace('.', ',') : '');
+
+function opcoesPagamento(selecionado) {
+  return `<option value="">Não informar</option>${PAGAMENTOS.map((p) => `
+    <option value="${p}" ${selecionado === p ? 'selected' : ''}>${p}</option>`).join('')}`;
+}
+
+function rotuloViagem(v) {
+  return `${v.origem} → ${v.destino}${v.inicio ? ` (saída ${dataDiaMes(v.inicio)})` : ''}`
+    + `${ehAdmin() && v.motorista ? ` — ${v.motorista}` : ''}`;
+}
+
+function cartaoKpi(cor, ico, rotulo, valor, subtexto, classeValor = '') {
+  return `
+    <div class="card-kpi">
+      <div class="icone-kpi ${cor}">${icone(ico)}</div>
+      <div class="corpo-kpi">
+        <span class="rotulo">${esc(rotulo)}</span>
+        <span class="valor ${classeValor}">${valor}</span>
+        <span class="subtexto">${subtexto}</span>
+      </div>
+    </div>`;
+}
+
+function aoTocar(raiz, seletor, acao) {
+  raiz.querySelectorAll(seletor).forEach((el) => {
+    el.onclick = () => acao(el);
+    el.onkeydown = (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); acao(el); }
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Fretes a receber (proprietário)
+// ---------------------------------------------------------------------------
+
+function seloSituacao(r) {
+  if (r.situacao === 'recebido') return '<span class="badge-status aberta">✓ Recebido</span>';
+  if (r.vencido) {
+    return `<span class="badge-status vencido">${r.situacao === 'parcial' ? 'Parte recebida · ' : ''}Vencido</span>`;
+  }
+  if (r.situacao === 'parcial') return '<span class="badge-status parcial">Recebido em parte</span>';
+  return '<span class="badge-status pendente">A receber</span>';
+}
+
+function barraRecebido(r) {
+  const pct = r.valor_centavos ? Math.min(100, Math.round((r.recebido_centavos / r.valor_centavos) * 100)) : 0;
+  return `
+    <div class="progresso-receber" title="${pct}% recebido">
+      <div class="trilha"><div class="preenche" style="width:${pct}%"></div></div>
+      <small>${pct}% recebido</small>
+    </div>`;
+}
+
+async function telaReceber(alvo) {
+  const filtro = { mes: hoje().slice(0, 7), status: 'abertos', busca: '' };
+  alvo.innerHTML = `
+    <div class="pilha">
+      <div class="titulo-secao">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
+          <div>
+            <h1>Fretes a receber</h1>
+            <p>O que entrou no mês, o que os clientes ainda devem e quem pagou só uma parte.</p>
+          </div>
+          <button class="btn principal" type="button" id="b-novo-receber">${icone('adicionar')} Novo frete a receber</button>
+        </div>
+      </div>
+
+      <div class="cartao" style="padding:14px 16px">
+        <div class="barra-filtros-tela">
+          <div class="campo campo-mes">
+            <label for="r-mes">Mês do resumo</label>
+            <input id="r-mes" type="month" value="${filtro.mes}">
+          </div>
+          <div class="campo">
+            <label for="r-busca">Buscar</label>
+            <input id="r-busca" type="search" placeholder="Cliente, descrição ou nº da nota">
+          </div>
+        </div>
+        <div class="filtro-pills-ajustes" role="group" aria-label="Situação" style="margin:12px 0 0">
+          <button type="button" data-status="abertos" aria-pressed="true">Em aberto</button>
+          <button type="button" data-status="recebidos" aria-pressed="false">Recebidos</button>
+          <button type="button" data-status="todos" aria-pressed="false">Todos</button>
+        </div>
+      </div>
+
+      <div id="r-kpis"></div>
+      <div id="r-lista"><p class="carregando">Carregando fretes…</p></div>
+    </div>`;
+
+  const atualiza = async () => {
+    const caixa = alvo.querySelector('#r-lista');
+    caixa.innerHTML = '<p class="carregando">Carregando fretes…</p>';
+    const r = await api('GET', 'recebiveis', filtro);
+
+    alvo.querySelector('#r-kpis').innerHTML = `
+      <div class="grade-kpis">
+        ${cartaoKpi('verde', 'receber', `Recebido em ${mesCurto(r.mes)}`, dinheiro(r.recebido_mes_centavos),
+          `${dinheiro(r.recebido_cobrancas_mes_centavos)} veio de fretes a receber`, 'entrada')}
+        ${cartaoKpi('azul', 'aReceber', 'Falta receber', dinheiro(r.a_receber_centavos),
+          `${r.qtd_abertos} ${r.qtd_abertos === 1 ? 'frete em aberto' : 'fretes em aberto'}`)}
+        ${cartaoKpi('vermelho', 'aviso', 'Vencido', dinheiro(r.vencido_centavos),
+          r.vencido_centavos ? 'Passou do vencimento' : 'Nada vencido', r.vencido_centavos ? 'saida' : '')}
+        ${cartaoKpi('amarelo', 'caminhao', `Fretes de ${mesCurto(r.mes)}`, dinheiro(r.faturado_mes_centavos),
+          'Valor combinado dos fretes do mês')}
+      </div>`;
+
+    if (!r.itens.length) {
+      caixa.innerHTML = `
+        <div class="vazio">
+          ${icone('aReceber')}
+          <p style="margin-top:8px">${filtro.status === 'abertos'
+            ? 'Nenhum frete em aberto. Quando fechar um frete com o cliente, registre aqui o valor combinado.'
+            : 'Nenhum frete encontrado.'}</p>
+        </div>`;
+      return;
+    }
+
+    caixa.innerHTML = `
+      <div class="lista-viagens">
+        ${r.itens.map((x) => `
+          <div class="card-viagem ${x.vencido ? 'vencido' : ''}" data-recebivel="${x.id}" role="button" tabindex="0">
+            <div class="cabecalho-viagem">
+              <div class="rota-viagem"><span class="ponto">${esc(x.cliente)}</span></div>
+              ${seloSituacao(x)}
+            </div>
+            <div class="meta-viagem">
+              <span>${esc(x.descricao || x.categoria)}</span>
+              <span class="separador-ponto">·</span><span>${dataCurta(x.data)}</span>
+              ${x.vencimento ? `<span class="separador-ponto">·</span><span>vence ${dataCurta(x.vencimento)}</span>` : ''}
+              ${x.nota_fiscal_id ? `<span class="separador-ponto">·</span><span>NF ${esc(x.nota_numero || 's/ nº')}</span>` : ''}
+              ${x.placa ? `<span class="separador-ponto">·</span><span class="badge-placa">${esc(x.placa)}</span>` : ''}
+            </div>
+            ${barraRecebido(x)}
+            <div class="metricas-viagem">
+              <div class="coluna-metrica">
+                <div class="rotulo">Valor do frete</div>
+                <div class="valor">${dinheiro(x.valor_centavos)}</div>
+              </div>
+              <div class="coluna-metrica">
+                <div class="rotulo">Recebido</div>
+                <div class="valor entrada">${dinheiro(x.recebido_centavos)}</div>
+              </div>
+              <div class="coluna-metrica">
+                <div class="rotulo">Falta</div>
+                <div class="valor ${x.restante_centavos ? 'saida' : ''}">${dinheiro(x.restante_centavos)}</div>
+              </div>
+            </div>
+          </div>`).join('')}
+      </div>`;
+    aoTocar(caixa, '[data-recebivel]', (el) => abreRecebivel(Number(el.dataset.recebivel), atualiza));
+  };
+
+  alvo.querySelector('#r-mes').onchange = (e) => { filtro.mes = e.target.value || hoje().slice(0, 7); atualiza(); };
+  let espera;
+  alvo.querySelector('#r-busca').oninput = (e) => {
+    clearTimeout(espera);
+    espera = setTimeout(() => { filtro.busca = e.target.value.trim(); atualiza(); }, 250);
+  };
+  alvo.querySelectorAll('[data-status]').forEach((b) => {
+    b.onclick = () => {
+      alvo.querySelectorAll('[data-status]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+      filtro.status = b.dataset.status;
+      atualiza();
+    };
+  });
+  alvo.querySelector('#b-novo-receber').onclick = () => formRecebivel(null, atualiza);
+  await atualiza();
+}
+
+async function abreRecebivel(id, aoConcluir) {
+  const r = await api('GET', 'recebivel', { id });
+  const linhas = [
+    ['Tipo de frete', r.categoria],
+    ['Descrição', r.descricao],
+    ['Data do frete', dataCurta(r.data)],
+    ['Vencimento', r.vencimento ? dataCurta(r.vencimento) : null],
+    ['Viagem', r.viagem_origem ? `${r.viagem_origem} → ${r.viagem_destino}` : null],
+    ['Caminhão', r.placa ? `${r.placa}${r.caminhao_apelido ? ` — ${r.caminhao_apelido}` : ''}` : null],
+    ['Nota fiscal', r.nota_fiscal_id ? `NF ${r.nota_numero || 'sem número'}` : null],
+    ['Último recebimento', r.ultimo_recebimento ? dataCurta(r.ultimo_recebimento) : null],
+    ['Observação', r.observacao],
+  ].filter(([, v]) => v);
+
+  const { elemento, fechar } = janela(r.cliente, `
+    <div class="cartao">
+      <p style="margin:0 0 12px">${seloSituacao(r)}</p>
+      <div class="grade">
+        <div class="mini">
+          <div class="rotulo">Valor do frete</div>
+          <div class="numero">${dinheiro(r.valor_centavos)}</div>
+        </div>
+        <div class="mini">
+          <div class="rotulo">Já recebido</div>
+          <div class="numero entrada">${dinheiro(r.recebido_centavos)}</div>
+          <small>${r.qtd_recebimentos} ${Number(r.qtd_recebimentos) === 1 ? 'pagamento' : 'pagamentos'}</small>
+        </div>
+        <div class="mini">
+          <div class="rotulo">Falta receber</div>
+          <div class="numero ${r.restante_centavos ? 'saida' : ''}">${dinheiro(r.restante_centavos)}</div>
+        </div>
+      </div>
+      <div style="margin:14px 0">${barraRecebido(r)}</div>
+      <table class="simples">
+        ${linhas.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}
+      </table>
+      ${r.nota_arquivo ? `
+        <p style="margin:14px 0 0">
+          <a class="btn pequeno" href="${endereco('comprovante', { arquivo: r.nota_arquivo })}" target="_blank" rel="noopener">
+            ${icone('nota')} Ver nota fiscal
+          </a>
+        </p>` : ''}
+    </div>
+    <div class="cartao" style="margin-top:14px">
+      <h2>Pagamentos recebidos</h2>
+      ${r.recebimentos.length
+        ? `<div class="lista">${r.recebimentos.map((l) => itemLancamento(l)).join('')}</div>`
+        : '<p class="ajuda" style="margin:0">Nada recebido ainda.</p>'}
+    </div>
+    <div class="acoes fim" style="margin-top:16px">
+      <button class="btn perigo" type="button" data-excluir>Excluir</button>
+      <button class="btn" type="button" data-editar>Editar</button>
+      ${r.restante_centavos > 0 ? `
+        <button class="btn principal" type="button" data-receber>${icone('receber')} Registrar pagamento</button>` : ''}
+    </div>`);
+
+  ligaItens(elemento);
+  elemento.querySelector('[data-editar]').onclick = () => { fechar(); formRecebivel(r, aoConcluir); };
+  elemento.querySelector('[data-receber]')?.addEventListener('click', () => { fechar(); formRecebimento(r, aoConcluir); });
+  elemento.querySelector('[data-excluir]').onclick = async () => {
+    if (!confirm('Excluir este frete a receber? O que já foi recebido continua em Lançamentos como entrada.')) return;
+    try {
+      await api('DELETE', 'recebivel', { id: r.id });
+    } catch (erro) {
+      recado(erro.message);
+      return;
+    }
+    fechar();
+    recado('Frete a receber excluído.');
+    await recarregaRecebiveisAbertos();
+    await aoConcluir?.();
+  };
+}
+
+// base: dados para já vir preenchido (ex.: criado a partir de uma nota fiscal).
+async function formRecebivel(r, aoConcluir, base = {}) {
+  const [notas, viagens] = await Promise.all([
+    api('GET', 'notas', { sem_cobranca: 1, limite: 200 }),
+    api('GET', 'viagens', { limite: 150 }),
+  ]);
+  const v = r || base;
+  const notaAtual = v.nota_fiscal_id
+    ? { id: v.nota_fiscal_id, numero: v.nota_numero, cliente: v.nota_cliente || null } : null;
+  const listaNotas = comOExtra(notas, notaAtual);
+  const tipos = categoriasDoTipo('entrada');
+
+  const { elemento, fechar } = janela(r ? 'Editar frete a receber' : 'Novo frete a receber', `
+    <form class="form-pilha" novalidate>
+      <div class="campo">
+        <label for="rb-cliente">Cliente</label>
+        <p class="dica">Quem vai pagar o frete: empresa, cooperativa ou pessoa.</p>
+        <input id="rb-cliente" name="cliente" required maxlength="90" value="${esc(v.cliente || '')}">
+      </div>
+      <div class="linha duas">
+        <div class="campo">
+          <label for="rb-categoria">Tipo de frete</label>
+          <select id="rb-categoria" name="categoria_id" required>
+            ${comOExtra(tipos, v.categoria_id ? { id: v.categoria_id, nome: v.categoria } : null).map((c) => `
+              <option value="${c.id}" ${Number(v.categoria_id) === Number(c.id) ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="campo">
+          <label for="rb-valor">Valor combinado</label>
+          <div class="valor-caixa">
+            <span aria-hidden="true">R$</span>
+            <input id="rb-valor" name="valor" inputmode="decimal" required placeholder="0,00"
+                   value="${esc(valorParaCampo(v.valor_centavos))}">
+          </div>
+        </div>
+      </div>
+      <div class="campo opcional">
+        <label for="rb-descricao">Descrição</label>
+        <p class="dica">Ex.: 45 t de soja, Rondonópolis → Santos.</p>
+        <input id="rb-descricao" name="descricao" maxlength="140" value="${esc(v.descricao || '')}">
+      </div>
+      <div class="linha duas">
+        <div class="campo">
+          <label for="rb-data">Data do frete</label>
+          <input id="rb-data" name="data" type="date" required value="${esc(v.data || hoje())}">
+        </div>
+        <div class="campo opcional">
+          <label for="rb-vencimento">Vencimento</label>
+          <input id="rb-vencimento" name="vencimento" type="date" value="${esc(v.vencimento || '')}">
+        </div>
+      </div>
+      <div class="linha duas">
+        <div class="campo opcional">
+          <label for="rb-viagem">Viagem</label>
+          <select id="rb-viagem" name="viagem_id">
+            <option value="">Sem viagem</option>
+            ${viagens.map((x) => `
+              <option value="${x.id}" ${Number(v.viagem_id) === Number(x.id) ? 'selected' : ''}>${esc(rotuloViagem(x))}</option>`).join('')}
+          </select>
+        </div>
+        <div class="campo opcional">
+          <label for="rb-caminhao">Caminhão</label>
+          <select id="rb-caminhao" name="caminhao_id">
+            ${opcoesCaminhao(v.caminhao_id, v.placa ? { id: v.caminhao_id, placa: v.placa, apelido: v.caminhao_apelido } : null)
+              .replace('Selecione o caminhão', 'Sem caminhão')}
+          </select>
+        </div>
+      </div>
+      <div class="campo opcional">
+        <label for="rb-nota">Nota fiscal</label>
+        <p class="dica">Notas enviadas pela equipe que ainda não estão em outro frete.</p>
+        <select id="rb-nota" name="nota_fiscal_id">
+          <option value="">Sem nota</option>
+          ${listaNotas.map((n) => `
+            <option value="${n.id}" ${Number(v.nota_fiscal_id) === Number(n.id) ? 'selected' : ''}>
+              NF ${esc(n.numero || 'sem número')}${n.cliente ? ` — ${esc(n.cliente)}` : ''}${n.data ? ` (${dataCurta(n.data)})` : ''}
+            </option>`).join('')}
+        </select>
+      </div>
+      <div class="campo opcional">
+        <label for="rb-obs">Observação</label>
+        <textarea id="rb-obs" name="observacao" maxlength="500">${esc(v.observacao || '')}</textarea>
+      </div>
+      <div class="acoes fim">
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">${r ? 'Salvar alterações' : 'Salvar frete'}</button>
+      </div>
+    </form>`);
+
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+  form.elements.valor.addEventListener('blur', () => {
+    const n = Number(String(form.elements.valor.value).replace(/\./g, '').replace(',', '.'));
+    if (Number.isFinite(n) && n > 0) form.elements.valor.value = n.toFixed(2).replace('.', ',');
+  });
+  // Escolher a nota preenche o que estiver em branco.
+  form.elements.nota_fiscal_id.onchange = () => {
+    const n = notas.find((x) => Number(x.id) === Number(form.elements.nota_fiscal_id.value));
+    if (!n) return;
+    if (!form.elements.cliente.value && n.cliente) form.elements.cliente.value = n.cliente;
+    if (!form.elements.valor.value && n.valor_centavos) form.elements.valor.value = valorParaCampo(n.valor_centavos);
+    if (!form.elements.viagem_id.value && n.viagem_id) form.elements.viagem_id.value = n.viagem_id;
+    if (!form.elements.caminhao_id.value && n.caminhao_id) form.elements.caminhao_id.value = n.caminhao_id;
+  };
+
+  aoEnviar(form, async (dados) => {
+    if (!dados.cliente?.trim()) throw new Error('Informe o cliente.');
+    if (!String(dados.valor || '').trim()) throw new Error('Informe o valor combinado do frete.');
+    if (r) await api('PUT', 'recebivel', { id: r.id }, dados);
+    else await api('POST', 'recebiveis', {}, dados);
+    fechar();
+    recado(r ? 'Frete a receber atualizado.' : 'Frete a receber registrado.');
+    await recarregaRecebiveisAbertos();
+    await aoConcluir?.();
+  });
+}
+
+function formRecebimento(r, aoConcluir) {
+  const { elemento, fechar } = janela(`Pagamento — ${r.cliente}`, `
+    <form class="form-pilha" novalidate>
+      <p class="aviso info" style="margin:0">
+        Falta receber <strong>${dinheiro(r.restante_centavos)}</strong> de ${dinheiro(r.valor_centavos)}.
+      </p>
+      <div class="linha duas">
+        <div class="campo">
+          <label for="rc-valor">Valor recebido</label>
+          <div class="valor-caixa">
+            <span aria-hidden="true">R$</span>
+            <input id="rc-valor" name="valor" inputmode="decimal" required value="${esc(valorParaCampo(r.restante_centavos))}">
+          </div>
+          <p class="dica">Se o cliente pagou só uma parte, digite só o que entrou.</p>
+        </div>
+        <div class="campo">
+          <label for="rc-data">Dia do recebimento</label>
+          <input id="rc-data" name="data" type="date" required value="${hoje()}">
+        </div>
+      </div>
+      <div class="campo opcional">
+        <label for="rc-pagamento">Como recebeu</label>
+        <select id="rc-pagamento" name="pagamento">${opcoesPagamento('')}</select>
+      </div>
+      <div class="campo opcional">
+        <label for="rc-obs">Observação</label>
+        <textarea id="rc-obs" name="observacao" maxlength="500"></textarea>
+      </div>
+      ${campoArquivo('rc-arquivo', 'Comprovante', 'Foto ou PDF do Pix, depósito ou boleto pago.', 'comprovante', '')}
+      <div class="acoes fim">
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">Registrar pagamento</button>
+      </div>
+    </form>`);
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+  ligaArquivo(form, 'rc-arquivo', 'comprovante', 'Nenhum arquivo escolhido');
+  aoEnviar(form, async (dados) => {
+    const atualizado = await api('POST', 'recebivel-receber', { id: r.id }, dados);
+    fechar();
+    recado(atualizado.situacao === 'recebido'
+      ? 'Frete quitado! Tudo recebido.'
+      : `Pagamento registrado. Ainda falta ${dinheiro(atualizado.restante_centavos)}.`);
+    await recarregaRecebiveisAbertos();
+    await aoConcluir?.();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Notas fiscais dos clientes (proprietário e motoristas)
+// ---------------------------------------------------------------------------
+
+const ehPdf = (arquivo) => /\.pdf$/i.test(String(arquivo || ''));
+
+function itemNota(n) {
+  const meta = [
+    `<span>${dataCurta(n.data)}</span>`,
+    n.viagem_origem ? `<span>${esc(n.viagem_origem)} → ${esc(n.viagem_destino)}</span>` : '',
+    ehAdmin() || Number(n.usuario_id) !== Number(estado.usuario.id) ? `<span>enviada por ${esc(n.enviado_por)}</span>` : '',
+  ].filter(Boolean).join('<span class="separador-ponto">·</span>');
+  return `
+    <div class="item-lancamento-moderno" data-nota="${n.id}" role="button" tabindex="0">
+      <div class="icone-lancamento nota">${icone(ehPdf(n.arquivo) ? 'pdf' : 'nota')}</div>
+      <div class="info-lancamento">
+        <div class="topo-lancamento">
+          <span class="nome-lancamento">NF ${esc(n.numero || 'sem número')}${n.cliente ? ` — ${esc(n.cliente)}` : ''}</span>
+          ${n.placa ? `<span class="badge-placa">${esc(n.placa)}</span>` : ''}
+          ${seloPrazo(n)}
+          ${ehAdmin() && n.recebivel_id ? '<span class="tag-status-visivel">No a receber</span>' : ''}
+        </div>
+        <div class="meta-lancamento">${meta}</div>
+      </div>
+      <div class="valor-lancamento">
+        ${n.valor_centavos != null ? `<span class="quantia">${dinheiro(n.valor_centavos)}</span>` : ''}
+        <span class="seta-acao">${icone('setaDireita')}</span>
+      </div>
+    </div>`;
+}
+
+async function telaNotas(alvo) {
+  const admin = ehAdmin();
+  const filtro = { mes: '', busca: '', usuario_id: '', limite: 300 };
+  alvo.innerHTML = `
+    <div class="pilha">
+      <div class="titulo-secao">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
+          <div>
+            <h1>Notas fiscais</h1>
+            <p>${admin
+              ? 'Notas dos clientes enviadas por você e pelos motoristas, em foto ou PDF.'
+              : 'Envie a foto ou o PDF da nota fiscal do cliente. O escritório recebe na hora.'}</p>
+          </div>
+          <button class="btn principal" type="button" id="b-nova-nota">${icone('adicionar')} Enviar nota fiscal</button>
+        </div>
+      </div>
+
+      <div class="cartao" style="padding:14px 16px">
+        <div class="barra-filtros-tela">
+          <div class="campo campo-mes">
+            <label for="n-mes">Mês de emissão</label>
+            <input id="n-mes" type="month">
+          </div>
+          ${admin ? `
+            <div class="campo">
+              <label for="n-usuario">Enviada por</label>
+              <select id="n-usuario">
+                <option value="">Todos</option>
+                ${opcoesMotorista('')}
+              </select>
+            </div>` : ''}
+          <div class="campo">
+            <label for="n-busca">Buscar</label>
+            <input id="n-busca" type="search" placeholder="Número, cliente ou observação">
+          </div>
+        </div>
+      </div>
+
+      <div id="n-lista"><p class="carregando">Carregando notas…</p></div>
+    </div>`;
+
+  const atualiza = async () => {
+    const caixa = alvo.querySelector('#n-lista');
+    caixa.innerHTML = '<p class="carregando">Carregando notas…</p>';
+    const notas = await api('GET', 'notas', filtro);
+    if (!notas.length) {
+      caixa.innerHTML = `
+        <div class="vazio">
+          ${icone('nota')}
+          <p style="margin-top:8px">${filtro.mes || filtro.busca || filtro.usuario_id
+            ? 'Nenhuma nota encontrada com esses filtros.'
+            : 'Nenhuma nota fiscal enviada ainda. Toque em "Enviar nota fiscal" para mandar a primeira.'}</p>
+        </div>`;
+      return;
+    }
+    caixa.innerHTML = `
+      <div class="cartao" style="padding:12px 14px">
+        <div class="lista">${notas.map(itemNota).join('')}</div>
+      </div>`;
+    aoTocar(caixa, '[data-nota]', (el) => {
+      abreNota(notas.find((n) => Number(n.id) === Number(el.dataset.nota)), atualiza);
+    });
+  };
+
+  alvo.querySelector('#n-mes').onchange = (e) => { filtro.mes = e.target.value; atualiza(); };
+  alvo.querySelector('#n-usuario')?.addEventListener('change', (e) => { filtro.usuario_id = e.target.value; atualiza(); });
+  let espera;
+  alvo.querySelector('#n-busca').oninput = (e) => {
+    clearTimeout(espera);
+    espera = setTimeout(() => { filtro.busca = e.target.value.trim(); atualiza(); }, 250);
+  };
+  alvo.querySelector('#b-nova-nota').onclick = () => formNota(null, atualiza);
+  await atualiza();
+}
+
+function abreNota(n, aoConcluir) {
+  const url = endereco('comprovante', { arquivo: n.arquivo });
+  const pdf = ehPdf(n.arquivo);
+  const linhas = [
+    ['Número', n.numero || 'Sem número'],
+    ['Cliente', n.cliente],
+    ['Emissão', dataCurta(n.data)],
+    ['Valor', n.valor_centavos != null ? dinheiro(n.valor_centavos) : null],
+    ['Viagem', n.viagem_origem ? `${n.viagem_origem} → ${n.viagem_destino}` : null],
+    ['Caminhão', n.placa ? `${n.placa}${n.caminhao_apelido ? ` — ${n.caminhao_apelido}` : ''}` : null],
+    ['Enviada por', n.enviado_por],
+    ['Observação', n.observacao],
+  ].filter(([, v]) => v);
+
+  const { elemento, fechar } = janela(`NF ${n.numero || 'sem número'}`, `
+    <div class="cartao">
+      ${pdf ? '' : `
+        <a class="previa-nota" href="${url}" target="_blank" rel="noopener" title="Abrir a foto inteira">
+          <img src="${url}" alt="Foto da nota fiscal">
+        </a>`}
+      <table class="simples">
+        ${linhas.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}
+      </table>
+      <p style="margin:14px 0 0">
+        <a class="btn pequeno" href="${url}" target="_blank" rel="noopener">
+          ${icone(pdf ? 'pdf' : 'olho')} ${pdf ? 'Abrir PDF' : 'Abrir foto'}
+        </a>
+      </p>
+    </div>
+    ${avisoPrazo(n)}
+    <div class="acoes fim" style="margin-top:16px">
+      ${n.pode_alterar ? `
+        <button class="btn perigo" type="button" data-excluir>Excluir</button>
+        <button class="btn" type="button" data-editar>Editar</button>` : ''}
+      ${ehAdmin() ? (n.recebivel_id
+        ? '<button class="btn principal" type="button" data-ver-receber>Ver frete a receber</button>'
+        : `<button class="btn principal" type="button" data-criar-receber>${icone('aReceber')} Criar frete a receber</button>`) : ''}
+    </div>`);
+
+  vigiaPrazo(elemento, n);
+  elemento.querySelector('[data-editar]')?.addEventListener('click', () => { fechar(); formNota(n, aoConcluir); });
+  elemento.querySelector('[data-excluir]')?.addEventListener('click', async () => {
+    if (!confirm('Excluir esta nota fiscal? O arquivo também é apagado.')) return;
+    try {
+      await api('DELETE', 'nota', { id: n.id });
+    } catch (erro) {
+      recado(erro.message);
+      return;
+    }
+    fechar();
+    recado('Nota fiscal excluída.');
+    await aoConcluir?.();
+  });
+  elemento.querySelector('[data-criar-receber]')?.addEventListener('click', () => {
+    fechar();
+    formRecebivel(null, aoConcluir, {
+      cliente: n.cliente, valor_centavos: n.valor_centavos, data: n.data, viagem_id: n.viagem_id,
+      caminhao_id: n.caminhao_id, nota_fiscal_id: n.id, nota_numero: n.numero, nota_cliente: n.cliente,
+    });
+  });
+  elemento.querySelector('[data-ver-receber]')?.addEventListener('click', () => {
+    fechar();
+    abreRecebivel(n.recebivel_id, aoConcluir);
+  });
+}
+
+function formNota(n, aoConcluir) {
+  const v = n || { data: hoje(), caminhao_id: estado.usuario.caminhao_padrao_id };
+  const { elemento, fechar } = janela(n ? 'Editar nota fiscal' : 'Enviar nota fiscal', `
+    <form class="form-pilha" novalidate>
+      ${campoArquivo('nf-arquivo', 'Foto ou PDF da nota',
+        'Tire uma foto nítida da nota inteira, ou escolha o PDF que o cliente mandou.',
+        'arquivo', v.arquivo, n ? 'Manter o arquivo atual' : 'Nenhum arquivo escolhido')}
+      <div class="linha duas">
+        <div class="campo opcional">
+          <label for="nf-numero">Número da nota</label>
+          <input id="nf-numero" name="numero" maxlength="40" value="${esc(v.numero || '')}">
+        </div>
+        <div class="campo">
+          <label for="nf-data">Data de emissão</label>
+          <input id="nf-data" name="data" type="date" required value="${esc(v.data || hoje())}">
+        </div>
+      </div>
+      <div class="campo opcional">
+        <label for="nf-cliente">Cliente</label>
+        <p class="dica">Nome da empresa ou pessoa da nota.</p>
+        <input id="nf-cliente" name="cliente" maxlength="90" value="${esc(v.cliente || '')}">
+      </div>
+      <div class="linha duas">
+        <div class="campo opcional">
+          <label for="nf-valor">Valor da nota</label>
+          <div class="valor-caixa">
+            <span aria-hidden="true">R$</span>
+            <input id="nf-valor" name="valor" inputmode="decimal" placeholder="0,00" value="${esc(valorParaCampo(v.valor_centavos))}">
+          </div>
+        </div>
+        <div class="campo opcional">
+          <label for="nf-caminhao">Caminhão</label>
+          <select id="nf-caminhao" name="caminhao_id">
+            ${opcoesCaminhao(v.caminhao_id, v.placa ? { id: v.caminhao_id, placa: v.placa, apelido: v.caminhao_apelido } : null)
+              .replace('Selecione o caminhão', 'Sem caminhão')}
+          </select>
+        </div>
+      </div>
+      <div class="campo opcional">
+        <label for="nf-viagem">Viagem</label>
+        <select id="nf-viagem" name="viagem_id">
+          ${opcoesViagem(v.viagem_id, v.viagem_origem
+            ? { id: v.viagem_id, origem: v.viagem_origem, destino: v.viagem_destino } : null).replace('Fora de viagem', 'Sem viagem')}
+        </select>
+      </div>
+      <div class="campo opcional">
+        <label for="nf-obs">Observação</label>
+        <textarea id="nf-obs" name="observacao" maxlength="500">${esc(v.observacao || '')}</textarea>
+      </div>
+      <div class="acoes fim">
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">${n ? 'Salvar alterações' : 'Enviar nota'}</button>
+      </div>
+    </form>`);
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+  ligaArquivo(form, 'nf-arquivo', 'arquivo', n ? 'Manter o arquivo atual' : 'Nenhum arquivo escolhido');
+  aoEnviar(form, async (dados) => {
+    if (!dados.arquivo) throw new Error('Anexe a foto ou o PDF da nota fiscal.');
+    if (n) await api('PUT', 'nota', { id: n.id }, dados);
+    else await api('POST', 'notas', {}, dados);
+    fechar();
+    if (n) recado('Nota fiscal atualizada.');
+    else if (ehAdmin()) recado('Nota fiscal guardada.');
+    else recado(`Nota enviada ao escritório. Se errou algo, dá para corrigir nos próximos ${MINUTOS_PARA_CORRIGIR} minutos.`);
+    await aoConcluir?.();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Diárias dos motoristas
+// ---------------------------------------------------------------------------
+
+const motoristasAtivos = () => estado.usuarios.filter((u) => Number(u.ativo) && u.papel === 'motorista');
+
+function itemDiaria(d) {
+  const meta = [
+    ehAdmin() ? `<span>${esc(d.motorista)}</span>` : '',
+    d.viagem_origem ? `<span>${esc(d.viagem_origem)} → ${esc(d.viagem_destino)}</span>` : '',
+    d.observacao ? `<span>${esc(d.observacao)}</span>` : '',
+  ].filter(Boolean).join('<span class="separador-ponto">·</span>');
+  return `
+    <div class="item-lancamento-moderno" data-diaria="${d.id}" role="button" tabindex="0">
+      <div class="icone-lancamento diaria">${icone('calendario')}</div>
+      <div class="info-lancamento">
+        <div class="topo-lancamento">
+          <span class="nome-lancamento">${diaDaSemana(d.data)}, ${dataCurta(d.data)}</span>
+          ${d.pago ? '<span class="tag-status-visivel">Paga</span>' : '<span class="tag-status-pendente">A pagar</span>'}
+          ${seloPrazo(d)}
+        </div>
+        ${meta ? `<div class="meta-lancamento">${meta}</div>` : ''}
+      </div>
+      <div class="valor-lancamento">
+        <span class="quantia">${Number(d.valor_centavos) ? dinheiro(d.valor_centavos) : '<small>sem valor</small>'}</span>
+        <span class="seta-acao">${icone('setaDireita')}</span>
+      </div>
+    </div>`;
+}
+
+async function telaDiarias(alvo) {
+  const admin = ehAdmin();
+  const filtro = { mes: hoje().slice(0, 7), usuario_id: '' };
+  alvo.innerHTML = `
+    <div class="pilha">
+      <div class="titulo-secao">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
+          <div>
+            <h1>${admin ? 'Diárias dos motoristas' : 'Minhas diárias'}</h1>
+            <p>${admin
+              ? 'Dias trabalhados por motorista, quanto vale a diária de cada um e o que falta pagar.'
+              : 'Registre os dias que você trabalhou e acompanhe quanto tem para receber.'}</p>
+          </div>
+          <button class="btn principal" type="button" id="b-nova-diaria">
+            ${icone('adicionar')} ${admin ? 'Lançar diárias' : 'Registrar dia trabalhado'}
+          </button>
+        </div>
+      </div>
+
+      <div class="cartao" style="padding:14px 16px">
+        <div class="barra-filtros-tela">
+          <div class="campo campo-mes">
+            <label for="d-mes">Mês</label>
+            <input id="d-mes" type="month" value="${filtro.mes}">
+          </div>
+          ${admin ? `
+            <div class="campo">
+              <label for="d-motorista">Motorista</label>
+              <select id="d-motorista">
+                <option value="">Todos os motoristas</option>
+                ${motoristasAtivos().map((u) => `<option value="${u.id}">${esc(u.nome)}</option>`).join('')}
+              </select>
+            </div>` : ''}
+        </div>
+      </div>
+
+      <div id="d-kpis"></div>
+      <div id="d-motoristas"></div>
+      <div id="d-lista"><p class="carregando">Carregando diárias…</p></div>
+    </div>`;
+
+  const atualiza = async () => {
+    const r = await api('GET', 'diarias', filtro);
+    const kpis = alvo.querySelector('#d-kpis');
+    if (admin) {
+      kpis.innerHTML = `
+        <div class="grade-kpis">
+          ${cartaoKpi('azul', 'calendario', 'Dias trabalhados', String(r.totais.dias),
+            `${r.motoristas.filter((m) => m.dias).length} motorista(s) em ${mesCurto(r.mes)}`)}
+          ${cartaoKpi('amarelo', 'saldo', 'Total do mês', dinheiro(r.totais.total_centavos), 'Soma das diárias do mês')}
+          ${cartaoKpi('verde', 'check', 'Já pago', dinheiro(r.totais.pago_centavos), 'Diárias quitadas', 'entrada')}
+          ${cartaoKpi('vermelho', 'gasto', 'Falta pagar', dinheiro(r.totais.pendente_centavos), 'Diárias pendentes do mês',
+            r.totais.pendente_centavos ? 'saida' : '')}
+        </div>`;
+    } else {
+      const m = r.motoristas[0] || { dias: 0, total_centavos: 0, pago_centavos: 0, pendente_centavos: 0 };
+      const deOutrosMeses = (m.pendente_geral_centavos || 0) - m.pendente_centavos;
+      kpis.innerHTML = `
+        <div class="grade-kpis">
+          ${cartaoKpi('azul', 'calendario', 'Dias trabalhados', String(m.dias), mesLongo(r.mes))}
+          ${cartaoKpi('amarelo', 'saldo', 'Valor da diária',
+            m.valor_diaria_centavos ? dinheiro(m.valor_diaria_centavos) : 'A combinar', 'Combinado com o escritório')}
+          ${cartaoKpi('verde', 'receber', 'Total do mês', dinheiro(m.total_centavos),
+            `${dinheiro(m.pago_centavos)} já pago`, 'entrada')}
+          ${cartaoKpi('vermelho', 'relogio', 'A receber', dinheiro(m.pendente_centavos), 'Diárias do mês ainda não pagas')}
+        </div>
+        ${deOutrosMeses > 0 ? `
+          <div class="aviso info" style="margin:12px 0 0">
+            Você ainda tem ${dinheiro(deOutrosMeses)} de diárias de outros meses para receber.
+          </div>` : ''}`;
+    }
+
+    const caixaMotoristas = alvo.querySelector('#d-motoristas');
+    if (admin && r.motoristas.length) {
+      caixaMotoristas.innerHTML = `
+        <div class="cartao">
+          <div class="secao-card-topo"><h2>Por motorista</h2></div>
+          <div class="lista-ajustes-entidades">
+            ${r.motoristas.map((m) => {
+              const outros = m.pendente_geral_centavos - m.pendente_centavos;
+              return `
+              <div class="item-ajustes-entidade">
+                <div style="display:flex;align-items:center;gap:12px;min-width:0">
+                  <div class="avatar-usuario-ajustes">${iniciais(m.nome)}</div>
+                  <div class="dados-entidade-ajustes">
+                    <strong>${esc(m.nome)}</strong>
+                    <small>${m.valor_diaria_centavos ? `Diária de ${dinheiro(m.valor_diaria_centavos)}` : 'Diária sem valor (defina em Ajustes)'}
+                      • ${m.dias} ${m.dias === 1 ? 'dia' : 'dias'} • ${dinheiro(m.total_centavos)}</small>
+                    <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
+                      ${m.pago_centavos ? `<span class="tag-status-visivel">Pago ${dinheiro(m.pago_centavos)}</span>` : ''}
+                      ${m.pendente_centavos ? `<span class="tag-status-pendente">A pagar ${dinheiro(m.pendente_centavos)}</span>` : ''}
+                      ${outros > 0 ? `<span class="tag-status-oculta">+ ${dinheiro(outros)} de outros meses</span>` : ''}
+                    </div>
+                  </div>
+                </div>
+                <div class="acoes-entidade-ajustes">
+                  ${m.pendente_centavos ? `
+                    <button class="btn principal pequeno" type="button" data-pagar="${m.usuario_id}">
+                      ${icone('check')} Pagar ${dinheiro(m.pendente_centavos)}
+                    </button>` : ''}
+                </div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>`;
+      caixaMotoristas.querySelectorAll('[data-pagar]').forEach((b) => {
+        const m = r.motoristas.find((x) => Number(x.usuario_id) === Number(b.dataset.pagar));
+        const dias = r.itens.filter((d) => Number(d.usuario_id) === m.usuario_id && !d.pago).length;
+        b.onclick = () => formPagamentoDiarias(m, r.mes, dias, atualiza);
+      });
+    } else {
+      caixaMotoristas.innerHTML = '';
+    }
+
+    const caixa = alvo.querySelector('#d-lista');
+    caixa.innerHTML = r.itens.length ? `
+      <div class="cartao" style="padding:12px 14px">
+        <div class="secao-card-topo" style="padding:4px 6px 0"><h2>Dias registrados</h2></div>
+        <div class="lista">${r.itens.map(itemDiaria).join('')}</div>
+      </div>` : `
+      <div class="vazio">
+        ${icone('calendario')}
+        <p style="margin-top:8px">Nenhuma diária registrada em ${mesLongo(r.mes)}.</p>
+      </div>`;
+    aoTocar(caixa, '[data-diaria]', (el) => {
+      abreDiaria(r.itens.find((d) => Number(d.id) === Number(el.dataset.diaria)), atualiza);
+    });
+  };
+
+  alvo.querySelector('#d-mes').onchange = (e) => { filtro.mes = e.target.value || hoje().slice(0, 7); atualiza(); };
+  alvo.querySelector('#d-motorista')?.addEventListener('change', (e) => { filtro.usuario_id = e.target.value; atualiza(); });
+  alvo.querySelector('#b-nova-diaria').onclick = () => formDiaria(null, atualiza);
+  await atualiza();
+}
+
+function abreDiaria(d, aoConcluir) {
+  const linhas = [
+    ['Motorista', ehAdmin() ? d.motorista : null],
+    ['Dia', `${diaDaSemana(d.data)}, ${dataCurta(d.data)}`],
+    ['Valor', Number(d.valor_centavos) ? dinheiro(d.valor_centavos) : 'Sem valor definido'],
+    ['Viagem', d.viagem_origem ? `${d.viagem_origem} → ${d.viagem_destino}` : 'Fora de viagem'],
+    ['Situação', d.pago ? `Paga${d.pago_em ? ` em ${dataCurta(d.pago_em)}` : ''}` : 'A pagar'],
+    ['Observação', d.observacao],
+  ].filter(([, v]) => v);
+  const { elemento, fechar } = janela('Diária', `
+    <div class="cartao">
+      <table class="simples">
+        ${linhas.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}
+      </table>
+    </div>
+    ${d.pago
+      ? `<p class="aviso ok" style="margin-top:14px">Esta diária já foi paga.${ehAdmin()
+        ? ' Para mudar, exclua antes o pagamento em Lançamentos; as diárias voltam a ficar pendentes.' : ''}</p>`
+      : avisoPrazo(d)}
+    ${d.pode_alterar ? `
+      <div class="acoes fim" style="margin-top:16px">
+        <button class="btn perigo" type="button" data-excluir>Excluir</button>
+        <button class="btn principal" type="button" data-editar>Editar</button>
+      </div>` : ''}`);
+  vigiaPrazo(elemento, d);
+  elemento.querySelector('[data-editar]')?.addEventListener('click', () => { fechar(); formDiaria(d, aoConcluir); });
+  elemento.querySelector('[data-excluir]')?.addEventListener('click', async () => {
+    if (!confirm('Excluir esta diária?')) return;
+    try {
+      await api('DELETE', 'diaria', { id: d.id });
+    } catch (erro) {
+      recado(erro.message);
+      return;
+    }
+    fechar();
+    recado('Diária excluída.');
+    await aoConcluir?.();
+  });
+}
+
+function formDiaria(d, aoConcluir) {
+  const admin = ehAdmin();
+  const novo = !d;
+  const motoristas = motoristasAtivos();
+  if (admin && novo && !motoristas.length) {
+    recado('Cadastre um motorista em Ajustes antes de lançar diárias.');
+    return;
+  }
+  const diariaDe = (id) => {
+    const u = admin ? estado.usuarios.find((x) => Number(x.id) === Number(id)) : estado.usuario;
+    return u?.valor_diaria_centavos || null;
+  };
+  const padrao = diariaDe(d?.usuario_id || motoristas[0]?.id);
+
+  const { elemento, fechar } = janela(novo ? (admin ? 'Lançar diárias' : 'Registrar dia trabalhado') : 'Editar diária', `
+    <form class="form-pilha" novalidate>
+      ${admin && novo ? `
+        <div class="campo">
+          <label for="df-motorista">Motorista</label>
+          <select id="df-motorista" name="usuario_id">
+            ${motoristas.map((u) => `<option value="${u.id}">${esc(u.nome)}</option>`).join('')}
+          </select>
+        </div>` : ''}
+      <div class="linha duas">
+        <div class="campo">
+          <label for="df-de">${novo ? 'Dia trabalhado' : 'Dia'}</label>
+          <input id="df-de" name="${novo ? 'de' : 'data'}" type="date" required
+                 value="${esc(d?.data || hoje())}" ${admin ? '' : `max="${hoje()}"`}>
+        </div>
+        ${novo ? `
+          <div class="campo opcional">
+            <label for="df-ate">Até o dia</label>
+            <input id="df-ate" name="ate" type="date" ${admin ? '' : `max="${hoje()}"`}>
+            <p class="dica">Para registrar vários dias seguidos de uma vez.</p>
+          </div>` : ''}
+      </div>
+      <div class="campo opcional">
+        <label for="df-viagem">Viagem</label>
+        <select id="df-viagem" name="viagem_id">
+          ${opcoesViagem(d?.viagem_id, d?.viagem_origem
+            ? { id: d.viagem_id, origem: d.viagem_origem, destino: d.viagem_destino } : null)}
+        </select>
+      </div>
+      ${admin ? `
+        <div class="campo opcional">
+          <label for="df-valor">Valor da diária</label>
+          <div class="valor-caixa">
+            <span aria-hidden="true">R$</span>
+            <input id="df-valor" name="valor" inputmode="decimal" placeholder="${esc(valorParaCampo(padrao) || '0,00')}"
+                   value="${esc(novo ? '' : valorParaCampo(d.valor_centavos))}">
+          </div>
+          <p class="dica" data-dica-valor>${novo
+            ? (padrao ? `Em branco, usa a diária cadastrada do motorista (${dinheiro(padrao)}).`
+              : 'Este motorista ainda não tem diária cadastrada em Ajustes.')
+            : 'Valor desta diária.'}</p>
+        </div>` : `
+        <p class="ajuda" style="margin:0">${padrao
+          ? `Cada dia vale ${dinheiro(padrao)}, como combinado com o escritório.`
+          : 'O valor da diária é definido pelo escritório.'}</p>`}
+      <div class="campo opcional">
+        <label for="df-obs">Observação</label>
+        <input id="df-obs" name="observacao" maxlength="200" value="${esc(d?.observacao || '')}"
+               placeholder="Ex.: carregamento, espera na fila, folga trabalhada">
+      </div>
+      <div class="acoes fim">
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">${novo ? 'Registrar' : 'Salvar alterações'}</button>
+      </div>
+    </form>`);
+
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+  form.elements.usuario_id?.addEventListener('change', () => {
+    const valor = diariaDe(form.elements.usuario_id.value);
+    form.elements.valor.placeholder = valorParaCampo(valor) || '0,00';
+    form.querySelector('[data-dica-valor]').textContent = valor
+      ? `Em branco, usa a diária cadastrada do motorista (${dinheiro(valor)}).`
+      : 'Este motorista ainda não tem diária cadastrada em Ajustes.';
+  });
+  aoEnviar(form, async (dados) => {
+    if (novo) {
+      const r = await api('POST', 'diarias', {}, dados);
+      if (!r.criadas) throw new Error(r.ja_existiam === 1 ? 'Esse dia já está registrado.' : 'Esses dias já estão registrados.');
+      fechar();
+      const texto = `${r.criadas} ${r.criadas === 1 ? 'dia registrado' : 'dias registrados'}`
+        + `${r.ja_existiam ? ` (${r.ja_existiam} já existia${r.ja_existiam === 1 ? '' : 'm'})` : ''}.`;
+      recado(admin ? texto : `${texto} Dá para corrigir nos próximos ${MINUTOS_PARA_CORRIGIR} minutos.`);
+    } else {
+      await api('PUT', 'diaria', { id: d.id }, dados);
+      fechar();
+      recado('Diária atualizada.');
+    }
+    await aoConcluir?.();
+  });
+}
+
+function formPagamentoDiarias(m, mes, dias, aoConcluir) {
+  const gastos = categoriasDoTipo('saida');
+  const padrao = gastos.find((c) => /di[aá]ria/i.test(c.nome)) || gastos.find((c) => /sal[aá]rio/i.test(c.nome));
+  const { elemento, fechar } = janela(`Pagar diárias — ${m.nome}`, `
+    <form class="form-pilha" novalidate>
+      <div class="grade">
+        <div class="mini">
+          <div class="rotulo">Dias a pagar</div>
+          <div class="numero">${dias}</div>
+          <small>${mesLongo(mes)}</small>
+        </div>
+        <div class="mini">
+          <div class="rotulo">Total</div>
+          <div class="numero saida">${dinheiro(m.pendente_centavos)}</div>
+        </div>
+      </div>
+      <p class="ajuda" style="margin:0">
+        O pagamento entra como um gasto em Lançamentos. Se você excluir esse lançamento depois,
+        as diárias voltam a ficar pendentes.
+      </p>
+      <div class="linha duas">
+        <div class="campo">
+          <label for="pg-data">Dia do pagamento</label>
+          <input id="pg-data" name="data" type="date" required value="${hoje()}">
+        </div>
+        <div class="campo opcional">
+          <label for="pg-forma">Como pagou</label>
+          <select id="pg-forma" name="pagamento">${opcoesPagamento('Pix')}</select>
+        </div>
+      </div>
+      <div class="campo">
+        <label for="pg-categoria">Categoria do gasto</label>
+        <select id="pg-categoria" name="categoria_id">
+          ${gastos.map((c) => `
+            <option value="${c.id}" ${padrao && Number(padrao.id) === Number(c.id) ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="campo opcional">
+        <label for="pg-obs">Observação</label>
+        <input id="pg-obs" name="observacao" maxlength="500">
+      </div>
+      <div class="acoes fim">
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">${icone('check')} Confirmar pagamento</button>
+      </div>
+    </form>`);
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+  aoEnviar(form, async (dados) => {
+    const r = await api('POST', 'diarias-pagar', {}, { ...dados, usuario_id: m.usuario_id, mes });
+    fechar();
+    recado(`Pagamento de ${dinheiro(r.total_centavos)} registrado (${r.dias} ${r.dias === 1 ? 'dia' : 'dias'}).`);
+    await aoConcluir?.();
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Receita da empresa (motoristas só consultam)
+// ---------------------------------------------------------------------------
+
+async function telaReceita(alvo) {
+  const atual = hoje().slice(0, 7);
+  const periodo = { de: atual, ate: atual };
+  alvo.innerHTML = `
+    <div class="pilha">
+      <div class="titulo-secao">
+        <h1>Receita da empresa</h1>
+        <p>Quanto a empresa recebeu de fretes. Aqui é só consulta: quem lança e corrige os valores é o proprietário.</p>
+      </div>
+
+      <div class="cartao painel-filtro-panorama-cartao">
+        <div class="grade-filtro-panorama-limpo">
+          <div class="campo campo-mes-de">
+            <label for="rc-de">Mês inicial</label>
+            <input id="rc-de" type="month" value="${periodo.de}">
+          </div>
+          <div class="campo campo-mes-ate">
+            <label for="rc-ate">Mês final</label>
+            <input id="rc-ate" type="month" value="${periodo.ate}">
+          </div>
+          <div class="campo acao-filtro-atalhos">
+            <label class="rotulo-invisivel-alinhamento">&nbsp;</label>
+            <button class="btn-icone-filtro-panorama" type="button" id="rc-atalhos" title="Atalhos rápidos de período">
+              ${icone('filtro')} <span>Atalhos</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div id="rc-painel"><p class="carregando">Carregando receita…</p></div>
+    </div>`;
+
+  const campoDe = alvo.querySelector('#rc-de');
+  const campoAte = alvo.querySelector('#rc-ate');
+
+  const atualiza = async () => {
+    if (periodo.de > periodo.ate) [periodo.de, periodo.ate] = [periodo.ate, periodo.de];
+    campoDe.value = periodo.de;
+    campoAte.value = periodo.ate;
+    const { de, ate } = periodo;
+    const painel = alvo.querySelector('#rc-painel');
+    painel.innerHTML = '<p class="carregando">Carregando receita…</p>';
+    const r = await api('GET', 'receita', { de, ate });
+    if (periodo.de !== de || periodo.ate !== ate) return;
+
+    const varios = de !== ate;
+    const diferenca = r.total_centavos - r.anterior_centavos;
+    const qtd = r.meses.reduce((s, m) => s + m.qtd, 0);
+    const comMovimento = r.meses.filter((m) => m.qtd > 0).length || 1;
+    painel.innerHTML = `
+      <div class="pilha">
+        <div class="card-hero-destaque">
+          <div class="cabecalho-hero">
+            <span class="subtitulo-hero">Receita recebida · ${esc(periodoLongo(de, ate))}</span>
+            <span class="tag-hero positivo">Somente consulta</span>
+          </div>
+          <div class="valor-hero positivo">${dinheiro(r.total_centavos)}</div>
+          <div class="variacao-hero">
+            ${r.anterior_centavos
+              ? `${diferenca >= 0 ? '▲' : '▼'} <strong>${dinheiro(Math.abs(diferenca))}</strong> ${diferenca >= 0 ? 'a mais' : 'a menos'} que em ${esc(periodoLongo(r.anterior_de, r.anterior_ate))}`
+              : `Sem receita em ${esc(periodoLongo(r.anterior_de, r.anterior_ate))} para comparar.`}
+          </div>
+          <div class="mini-grid-hero">
+            <div class="item-mini-hero">
+              <span class="rotulo">A receber dos clientes</span>
+              <span class="valor" style="color:#93c5fd">${dinheiro(r.a_receber.a_receber_centavos)}</span>
+            </div>
+            <div class="item-mini-hero">
+              <span class="rotulo">Fretes recebidos</span>
+              <span class="valor">${qtd}</span>
+            </div>
+            ${varios ? `
+              <div class="item-mini-hero">
+                <span class="rotulo">Média por mês</span>
+                <span class="valor" style="color:#34d399">${dinheiro(Math.round(r.total_centavos / comMovimento))}</span>
+              </div>` : ''}
+          </div>
+        </div>
+
+        ${varios ? `
+          <div class="cartao">
+            <h2 style="margin:0 0 12px">Mês a mês</h2>
+            ${barras(r.meses.map((m) => ({ ...m, nome: mesCurto(m.mes) })), (i) => esc(i.nome), 'entrada')}
+          </div>` : ''}
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:16px">
+          <div class="cartao">
+            <h2 style="margin:0 0 12px">Por tipo de frete</h2>
+            ${barras(r.por_categoria, (i) => esc(i.nome), 'entrada')}
+          </div>
+          <div class="cartao">
+            <h2 style="margin:0 0 12px">Por caminhão</h2>
+            ${barras(r.por_caminhao, (i) => esc(i.nome), 'entrada')}
+          </div>
+        </div>
+
+        <div class="cartao" style="padding:12px 14px">
+          <div class="secao-card-topo" style="padding:4px 6px 0"><h2>Fretes recebidos no período</h2></div>
+          ${r.itens.length
+            ? `<div class="lista">${r.itens.map((l) => itemLancamento({ ...l, tipo: 'entrada' }, true)).join('')}</div>`
+            : '<div class="vazio" style="padding:20px">Nenhum frete recebido no período.</div>'}
+        </div>
+      </div>`;
+  };
+
+  campoDe.onchange = () => { periodo.de = campoDe.value || atual; atualiza(); };
+  campoAte.onchange = () => { periodo.ate = campoAte.value || atual; atualiza(); };
+  alvo.querySelector('#rc-atalhos').onclick = () => {
+    const atalhos = atalhosPeriodo();
+    const { elemento, fechar } = janela('Atalhos de Período', `
+      <div class="lista-atalhos-periodo">
+        ${atalhos.map((a, i) => `
+          <button type="button" class="item-atalho-periodo ${a.de === periodo.de && a.ate === periodo.ate ? 'ativo' : ''}" data-idx-atalho="${i}">
+            <strong>${esc(a.nome)}</strong>
+            <small style="color:var(--tinta-3)">${mesCurto(a.de)}${a.de !== a.ate ? ` → ${mesCurto(a.ate)}` : ''}</small>
+          </button>`).join('')}
+      </div>`);
+    elemento.querySelectorAll('[data-idx-atalho]').forEach((b) => {
+      b.onclick = () => {
+        Object.assign(periodo, atalhos[Number(b.dataset.idxAtalho)]);
+        fechar();
+        atualiza();
+      };
+    });
+  };
+  await atualiza();
 }
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

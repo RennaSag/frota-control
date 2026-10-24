@@ -2573,3 +2573,306 @@ body.tela-entrada {
 }
 
 
+
+/* ==========================================================================
+   CLASSES QUE O APP USA E QUE VIERAM DA VERSÃO ANTERIOR
+   (detalhe de viagem e lançamento, tipo da categoria)
+   ========================================================================== */
+.grade {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.mini {
+  background: var(--superficie-2);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-s);
+  padding: 12px 14px;
+}
+
+.mini .rotulo {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--tinta-3);
+}
+
+.mini .numero {
+  font-size: 1.2rem;
+  font-weight: 800;
+  margin-top: 2px;
+  color: var(--tinta);
+}
+
+.mini .numero.entrada { color: var(--verde-hover); }
+.mini .numero.saida { color: var(--vermelho-hover); }
+.mini small { color: var(--tinta-3); font-size: 0.78rem; }
+
+@media (max-width: 600px) {
+  .grade { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .mini { padding: 10px 12px; }
+  .mini .numero { font-size: 1.05rem; }
+}
+
+.etiqueta {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--superficie-2);
+  border: 1px solid var(--borda-forte);
+  color: var(--tinta-2);
+  white-space: nowrap;
+}
+
+.etiqueta.aberta {
+  background: var(--verde-suave);
+  color: var(--verde-hover);
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+.escolha {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.escolha button {
+  border: 1px solid var(--borda-forte);
+  background: var(--superficie);
+  border-radius: var(--raio-s);
+  padding: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  min-height: 50px;
+  text-align: left;
+}
+
+.escolha button small {
+  display: block;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--tinta-3);
+  margin-top: 2px;
+}
+
+.escolha button[aria-pressed="true"] {
+  border-color: var(--primaria);
+  background: var(--primaria-suave);
+  color: var(--primaria);
+  box-shadow: inset 0 0 0 1px var(--primaria);
+}
+
+.escolha button:disabled { cursor: not-allowed; opacity: 0.6; }
+
+.campo label.arquivo {
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1.5px dashed var(--borda-forte);
+  border-radius: var(--raio-s);
+  background: var(--superficie-2);
+  font-weight: 500;
+  color: var(--tinta-2);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.campo label.arquivo span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.campo.opcional label.arquivo::after { content: none; }
+
+/* ==========================================================================
+   FRETES A RECEBER, NOTAS FISCAIS, DIÁRIAS E RECEITA
+   ========================================================================== */
+.form-pilha {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-pilha .aviso { margin-bottom: 0; }
+.form-pilha .acoes { margin-top: 4px; }
+
+.barra-filtros-tela {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.barra-filtros-tela .campo-mes { max-width: 220px; }
+
+@media (max-width: 600px) {
+  .barra-filtros-tela { grid-template-columns: 1fr; }
+  .barra-filtros-tela .campo-mes { max-width: none; }
+}
+
+.badge-status.parcial {
+  background: var(--ambar-suave);
+  color: var(--ambar-hover);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.badge-status.pendente {
+  background: var(--azul-suave);
+  color: var(--azul-hover);
+  border: 1px solid rgba(2, 132, 199, 0.3);
+}
+
+.badge-status.vencido {
+  background: var(--vermelho-suave);
+  color: var(--vermelho-hover);
+  border: 1px solid rgba(244, 63, 94, 0.35);
+}
+
+.card-viagem.vencido { border-color: rgba(244, 63, 94, 0.45); }
+
+.progresso-receber {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progresso-receber .trilha { flex: 1; }
+
+.progresso-receber .preenche {
+  background: linear-gradient(90deg, #10b981 0%, #34d399 100%);
+}
+
+.progresso-receber small {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--tinta-3);
+  white-space: nowrap;
+}
+
+.tag-status-pendente {
+  background: var(--ambar-suave);
+  color: var(--ambar-hover);
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+.selo-prazo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--ambar-hover);
+  background: var(--ambar-suave);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  padding: 1px 7px;
+  border-radius: var(--raio-pill);
+  white-space: nowrap;
+}
+
+.selo-prazo .ico-linha { width: 12px; height: 12px; }
+
+.aviso .ico-linha,
+.ajuda-tempo-expirado .ico-linha {
+  width: 15px;
+  height: 15px;
+  vertical-align: -3px;
+  flex-shrink: 0;
+}
+
+.ajuda-tempo-expirado {
+  margin: 14px 0 0;
+  gap: 4px;
+}
+
+.item-lancamento-moderno .icone-lancamento.nota {
+  background: var(--primaria-suave);
+  color: var(--primaria);
+}
+
+.item-lancamento-moderno .icone-lancamento.diaria {
+  background: var(--azul-suave);
+  color: var(--azul-hover);
+}
+
+.item-lancamento-moderno .quantia small {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--tinta-3);
+}
+
+.item-lancamento-moderno.somente-leitura { cursor: default; }
+
+.item-lancamento-moderno.somente-leitura:hover {
+  transform: none;
+  background: var(--superficie);
+  border-color: var(--borda);
+}
+
+.previa-nota {
+  display: block;
+  margin-bottom: 14px;
+  border-radius: var(--raio-s);
+  overflow: hidden;
+  border: 1px solid var(--borda);
+  background: var(--superficie-2);
+}
+
+.previa-nota img {
+  display: block;
+  width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.card-kpi.clicavel, .item-mini-hero.clicavel {
+  cursor: pointer;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.card-kpi.clicavel:hover {
+  border-color: var(--borda-forte);
+  transform: translateY(-1px);
+}
+
+.campo label.caixa-marcar {
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.campo label.caixa-marcar input {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: var(--primaria);
+}
+
+.campo label.caixa-marcar small {
+  display: block;
+  font-weight: 500;
+  color: var(--tinta-3);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.dock-flutuante button span { white-space: nowrap; }
+
+.lista-atalhos-periodo .item-atalho-periodo .ico-linha { width: 18px; height: 18px; }
+
+.item-mini-hero.clicavel:hover { opacity: 0.85; }

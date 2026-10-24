@@ -8,15 +8,29 @@ navegador — não precisa instalar aplicativo.
 
 | | **Motorista** | **Proprietário** |
 |---|---|---|
-| Lançar gastos | sim | sim |
+| Lançar gastos e abrir viagens | sim | sim |
 | Lançar entradas (fretes) | **não** | sim |
-| Ver lançamentos | só os próprios | todos |
-| Editar / excluir | só os próprios gastos | **tudo** |
+| Ver lançamentos | só os próprios gastos | todos |
+| Editar / excluir gasto ou viagem | só o que ele registrou, **nos primeiros 5 minutos** | **tudo, a qualquer hora** |
+| Encerrar a própria viagem | sim | sim |
+| Enviar notas fiscais (foto ou PDF) | sim | sim |
+| Registrar dias trabalhados (diárias) | os próprios | de qualquer motorista |
+| Pagar diárias | não | sim |
+| Receita da empresa (fretes recebidos) | **só consulta** | consulta e altera (em Lançamentos) |
+| Fretes a receber (o que os clientes devem) | não | sim |
 | Panorama | não | sim |
 | Cadastros (motoristas, caminhões, categorias) | não | sim |
 
-O motorista entra e já cai na tela de registrar gasto. Ele nunca vê o faturamento da
-empresa nem os lançamentos dos outros motoristas.
+O motorista entra e cai na lista dos gastos dele. Ele não vê os lançamentos dos outros
+motoristas, nem os gastos da empresa; da parte financeira, vê só a receita (fretes
+recebidos e o total a receber), sem poder mudar nada.
+
+### Prazo de 5 minutos do motorista
+
+Quando o motorista registra um gasto, uma viagem, uma nota fiscal ou uma diária, ele tem
+**5 minutos** para corrigir ou apagar. A tela mostra quanto tempo falta. Depois disso os
+botões somem e o servidor recusa a alteração: só o proprietário pode mudar. Encerrar a
+viagem (dia e km de chegada) continua liberado para o motorista.
 
 ---
 
@@ -79,7 +93,18 @@ hospedagem na internet — veja "Levar para a internet" no fim deste arquivo.
    - Em **Outro gasto** ele escreve o que foi (ex.: "chapa para descarga").
 4. No fim: **Viagens → Encerrar viagem** (dia da chegada e km final).
 
-Ele pode corrigir ou apagar um gasto que ele mesmo lançou em **Meus gastos**.
+Ele pode corrigir ou apagar um gasto que ele mesmo lançou em **Meus gastos**, nos
+primeiros 5 minutos.
+
+Também no app do motorista:
+
+- **Notas fiscais** — toca em **Enviar nota fiscal**, tira a foto da nota (ou escolhe o
+  PDF) e, se quiser, preenche número, cliente, valor e viagem. O escritório recebe um aviso.
+- **Diárias** — **Registrar dia trabalhado** (ou vários dias seguidos de uma vez). Ele vê
+  quantos dias trabalhou no mês, o valor da diária, o total e quanto ainda tem a receber.
+- **Receita** (no botão **Mais**, no celular) — quanto a empresa recebeu de fretes no
+  período, por tipo de frete e por caminhão, e o total que os clientes ainda devem.
+  Só consulta.
 
 ## Como o proprietário usa
 
@@ -100,16 +125,32 @@ Ele pode corrigir ou apagar um gasto que ele mesmo lançou em **Meus gastos**.
   Com o app aberto, ele confere a cada minuto e mostra um recado quando chega
   algo novo. Tocando em "Ativar notificações", o aviso aparece também na tela do
   aparelho (enquanto o app estiver aberto ou em segundo plano no navegador).
-- **Viagens** — todas as viagens, com gasto, frete e saldo de cada uma.
+- **A receber** — os fretes combinados com os clientes e quanto falta de cada um.
+  Mostra o **recebido no mês**, o **total a receber**, o que está **vencido** e a
+  situação de cada frete: *a receber*, *recebido em parte* ou *recebido*. Em
+  **Registrar pagamento** você lança o que o cliente pagou (tudo ou uma parte); isso vira
+  uma entrada em Lançamentos, ligada ao frete. Ao lançar uma entrada pelo botão normal,
+  dá para escolher a qual frete ela pertence.
+- **Viagens** — todas as viagens, com gasto, frete e saldo de cada uma. No detalhe da
+  viagem, **Lançar diárias** cria uma diária para o motorista em cada dia da viagem.
+- **Diárias** — dias trabalhados de cada motorista no mês, total, pago e a pagar. O botão
+  **Pagar** quita de uma vez as diárias pendentes do mês: vira um gasto em Lançamentos
+  (categoria "Diárias de motorista"). Se esse lançamento for excluído, as diárias voltam
+  a ficar pendentes. O valor da diária de cada motorista fica em **Ajustes → Editar**.
+- **Notas fiscais** — as notas enviadas por você e pelos motoristas, com a foto ou o PDF.
+  De uma nota dá para **Criar frete a receber** já preenchido.
 - **Ajustes** — motoristas e acessos (criar, bloquear, trocar senha, promover a
-  proprietário), caminhões e categorias.
+  proprietário, valor da diária, caminhão padrão), caminhões e categorias. Motorista ou
+  caminhão sem nenhum histórico pode ser excluído; com histórico, bloqueie ou marque
+  como fora de operação.
 
 ### Categorias que já vêm prontas
 
-- **Gastos:** Abastecimento, Salário do motorista, Manutenção, Pneus, Pedágio,
-  Seguro, IPVA e licenciamento, Peças e acessórios, Alimentação, Hospedagem,
-  Lavagem, Multas e "Outro gasto" (para os gastos eventuais, onde o motorista
-  escreve o que foi).
+- **Gastos:** Abastecimento, Salário do motorista, Diárias de motorista, Manutenção,
+  Pneus, Pedágio, Seguro, IPVA e licenciamento, Peças e acessórios, Alimentação,
+  Hospedagem, Lavagem, Multas e "Outro gasto" (para os gastos eventuais, onde o
+  motorista escreve o que foi). Salário e Diárias ficam escondidas dos motoristas
+  (opção "Esconder dos motoristas" na categoria).
 - **Entradas:** Frete de grãos, Frete de calcário, Outro frete e Outra entrada.
 
 Você pode criar quantas outras quiser em **Ajustes → Categorias**, e esconder as
@@ -195,7 +236,14 @@ Notas de implementação:
 - Senhas com `password_hash` (bcrypt), sessão em cookie `HttpOnly`/`SameSite=Lax`,
   freio de 10 tentativas de senha por usuário a cada 10 minutos, e os pedidos que
   gravam exigem o cabeçalho `X-App-Frota` (proteção contra CSRF).
-- As consultas SQL são comuns ao MySQL e ao SQLite; só o `CREATE TABLE` muda
-  (função `estruturaSql()` em `src/banco.php`).
+- As consultas SQL são comuns ao MySQL, ao SQLite e ao PostgreSQL; só o `CREATE TABLE`
+  muda (função `estruturaSql()` em `src/banco.php`).
+- **Atualização do banco:** a tabela `esquema` guarda a versão da estrutura
+  (`VERSAO_ESQUEMA`). Quando ela sobe, a primeira visita cria as tabelas novas e
+  acrescenta as colunas novas nas tabelas antigas, sem apagar dados.
+- **Fretes a receber:** o que falta receber nunca é gravado; é sempre o valor do frete
+  menos a soma das entradas com aquele `recebivel_id`. Assim não há como desencontrar.
+- **Prazo do motorista:** `MINUTOS_PARA_CORRIGIR` em `src/rotas.php` (o servidor decide;
+  a tela só mostra o tempo que falta).
 - Gráficos em HTML e CSS puro, sem bibliotecas externas: o sistema funciona
   mesmo sem internet, dentro da rede da empresa.
