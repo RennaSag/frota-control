@@ -894,7 +894,8 @@ function ultimoAvisoVisto(int $usuarioId): int
     if ($visto === null) {
         // Primeiro acesso: começa do zero, sem acusar o histórico antigo como novidade.
         $visto = (int) umValor('SELECT COALESCE(MAX(id), 0) FROM avisos');
-        insere('avisos_vistos', ['usuario_id' => $usuarioId, 'ultimo_id' => $visto]);
+        // Sem insere(): esta tabela não tem coluna id, e no PostgreSQL insere() pede "RETURNING id".
+        consulta('INSERT INTO avisos_vistos (usuario_id, ultimo_id) VALUES (?, ?)', [$usuarioId, $visto]);
     }
     return (int) $visto;
 }
