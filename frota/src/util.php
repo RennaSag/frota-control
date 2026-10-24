@@ -74,6 +74,14 @@ function campoCentavos($valor, string $campo = 'Valor'): int
     return $centavos;
 }
 
+function campoCentavosOpcional($valor, string $campo = 'Valor'): ?int
+{
+    if ($valor === null || trim((string) $valor) === '') {
+        return null;
+    }
+    return campoCentavos($valor, $campo);
+}
+
 function campoNumero($valor, string $campo, float $max = 10000000, bool $inteiro = false)
 {
     if ($valor === null || $valor === '') {

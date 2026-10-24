@@ -93,7 +93,8 @@ function usuarioAtual(): ?array
         return $cache;
     }
     $u = umaLinha(
-        'SELECT id, nome, usuario, papel, telefone FROM usuarios WHERE id = ? AND ativo = 1',
+        'SELECT id, nome, usuario, papel, telefone, caminhao_padrao_id, valor_diaria_centavos
+           FROM usuarios WHERE id = ? AND ativo = 1',
         [$_SESSION['usuario_id']]
     );
     if (!$u) {
@@ -101,6 +102,8 @@ function usuarioAtual(): ?array
         return null;
     }
     $u['id'] = (int) $u['id'];
+    $u['caminhao_padrao_id'] = $u['caminhao_padrao_id'] !== null ? (int) $u['caminhao_padrao_id'] : null;
+    $u['valor_diaria_centavos'] = $u['valor_diaria_centavos'] !== null ? (int) $u['valor_diaria_centavos'] : null;
     $cache = $u;
     return $cache;
 }

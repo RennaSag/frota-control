@@ -134,22 +134,53 @@ function atualiza(string $tabela, int $id, array $dados): int
     return consulta($sql, $args)->rowCount();
 }
 
+// Sobe sempre que a estrutura muda; bancos antigos ganham as tabelas e colunas novas
+// na primeira visita depois da atualização, sem perder nada.
+const VERSAO_ESQUEMA = 2;
+
 function criaEstrutura(PDO $pdo): void
 {
-    if (BANCO === 'pgsql' && $pdo->query("SELECT to_regclass('avisos_vistos')")->fetchColumn()) {
+    try {
+        $versao = (int) $pdo->query('SELECT MAX(versao) FROM esquema')->fetchColumn();
+    } catch (PDOException $e) {
+        $versao = 0;
+    }
+    if ($versao >= VERSAO_ESQUEMA) {
         return;
     }
     $sql = estruturaSql(BANCO);
     foreach ($sql['tabelas'] as $comando) {
         $pdo->exec($comando);
     }
+    $novasColunas = migraColunas($pdo, $sql['colunas']);
     foreach ($sql['indices'] as $comando) {
         try {
             $pdo->exec($comando);
         } catch (PDOException $e) {
         }
     }
-    semeia($pdo);
+    semeia($pdo, $novasColunas);
+    $pdo->exec('DELETE FROM esquema');
+    $pdo->exec('INSERT INTO esquema (versao) VALUES (' . VERSAO_ESQUEMA . ')');
+}
+
+// Acrescenta nas tabelas que já existiam as colunas criadas depois. Devolve as que foram criadas agora.
+function migraColunas(PDO $pdo, array $colunas): array
+{
+    $criadas = [];
+    foreach ($colunas as [$tabela, $coluna, $definicao]) {
+        try {
+            $pdo->query("SELECT $coluna FROM $tabela WHERE 1 = 0");
+            continue;
+        } catch (PDOException $e) {
+        }
+        try {
+            $pdo->exec("ALTER TABLE $tabela ADD COLUMN $coluna $definicao");
+            $criadas[] = "$tabela.$coluna";
+        } catch (PDOException $e) {
+        }
+    }
+    return $criadas;
 }
 
 function estruturaSql(string $banco): array
@@ -184,6 +215,8 @@ function estruturaSql(string $banco): array
         senha_hash  VARCHAR(255) NOT NULL,
         papel       VARCHAR(12)  NOT NULL,
         telefone    VARCHAR(30)      NULL,
+        caminhao_padrao_id    $ref      NULL,
+        valor_diaria_centavos $dinheiro NULL,
         ativo       $simNao      NOT NULL,
         criado_em   $dataHora    NOT NULL,
         UNIQUE (usuario)";
@@ -203,6 +236,7 @@ function estruturaSql(string $banco): array
         icone          VARCHAR(20) NOT NULL,
         pede_litros    $simNao     NOT NULL,
         pede_descricao $simNao     NOT NULL,
+        oculta_motorista $simNao   NOT NULL DEFAULT 0,
         ordem          INT         NOT NULL,
         ativo          $simNao     NOT NULL,
         UNIQUE (nome, tipo)";
@@ -240,6 +274,7 @@ function estruturaSql(string $banco): array
         cliente        VARCHAR(90)      NULL,
         observacao     VARCHAR(500)     NULL,
         comprovante    VARCHAR(120)     NULL,
+        recebivel_id   $ref             NULL,
         criado_em      $dataHora    NOT NULL,
         criado_por     $ref             NULL,
         atualizado_em  $dataHora        NULL,
@@ -249,6 +284,60 @@ function estruturaSql(string $banco): array
         FOREIGN KEY (caminhao_id)  REFERENCES caminhoes(id),
         FOREIGN KEY (viagem_id)    REFERENCES viagens(id)";
 
+    // Notas fiscais dos clientes (foto ou PDF), enviadas pelo proprietário ou pelos motoristas.
+    $tabelas['notas_fiscais'] = "
+        id             $id,
+        usuario_id     $ref         NOT NULL,
+        numero         VARCHAR(40)      NULL,
+        cliente        VARCHAR(90)      NULL,
+        data           $data        NOT NULL,
+        valor_centavos $dinheiro        NULL,
+        viagem_id      $ref             NULL,
+        caminhao_id    $ref             NULL,
+        arquivo        VARCHAR(120) NOT NULL,
+        observacao     VARCHAR(500)     NULL,
+        criado_em      $dataHora    NOT NULL,
+        atualizado_em  $dataHora        NULL,
+        FOREIGN KEY (usuario_id)  REFERENCES usuarios(id),
+        FOREIGN KEY (viagem_id)   REFERENCES viagens(id),
+        FOREIGN KEY (caminhao_id) REFERENCES caminhoes(id)";
+
+    // Fretes a receber. Cada parte recebida é um lançamento de entrada com recebivel_id;
+    // o que falta receber é sempre valor_centavos menos a soma dessas entradas.
+    $tabelas['recebiveis'] = "
+        id             $id,
+        cliente        VARCHAR(90)  NOT NULL,
+        descricao      VARCHAR(140)     NULL,
+        categoria_id   $ref         NOT NULL,
+        valor_centavos $dinheiro    NOT NULL,
+        data           $data        NOT NULL,
+        vencimento     $data            NULL,
+        viagem_id      $ref             NULL,
+        caminhao_id    $ref             NULL,
+        nota_fiscal_id $ref             NULL,
+        observacao     VARCHAR(500)     NULL,
+        criado_em      $dataHora    NOT NULL,
+        criado_por     $ref             NULL,
+        FOREIGN KEY (categoria_id)   REFERENCES categorias(id),
+        FOREIGN KEY (viagem_id)      REFERENCES viagens(id),
+        FOREIGN KEY (caminhao_id)    REFERENCES caminhoes(id),
+        FOREIGN KEY (nota_fiscal_id) REFERENCES notas_fiscais(id)";
+
+    // Um dia trabalhado por motorista. Quando é pago, lancamento_id aponta para a saída do pagamento.
+    $tabelas['diarias'] = "
+        id             $id,
+        usuario_id     $ref         NOT NULL,
+        data           $data        NOT NULL,
+        valor_centavos $dinheiro    NOT NULL,
+        viagem_id      $ref             NULL,
+        observacao     VARCHAR(200)     NULL,
+        lancamento_id  $ref             NULL,
+        criado_em      $dataHora    NOT NULL,
+        criado_por     $ref             NULL,
+        UNIQUE (usuario_id, data),
+        FOREIGN KEY (usuario_id) REFERENCES usuarios(id),
+        FOREIGN KEY (viagem_id)  REFERENCES viagens(id)";
+
     $tabelas['avisos'] = "
         id            $id,
         usuario_id    $ref         NOT NULL,
@@ -256,8 +345,12 @@ function estruturaSql(string $banco): array
         tipo          VARCHAR(10)  NOT NULL,
         lancamento_id $ref             NULL,
         resumo        VARCHAR(200) NOT NULL,
+        para_usuario_id $ref           NULL,
         criado_em     $dataHora    NOT NULL,
         FOREIGN KEY (usuario_id) REFERENCES usuarios(id)";
+
+    $tabelas['esquema'] = '
+        versao INT NOT NULL';
 
     $tabelas['avisos_vistos'] = "
         usuario_id $ref NOT NULL PRIMARY KEY,
@@ -289,17 +382,28 @@ function estruturaSql(string $banco): array
         'idx_lanc_usuario' => 'lancamentos (usuario_id)',
         'idx_lanc_viagem' => 'lancamentos (viagem_id)',
         'idx_viagem_usuario' => 'viagens (usuario_id)',
+        'idx_lanc_recebivel' => 'lancamentos (recebivel_id)',
+        'idx_nota_usuario' => 'notas_fiscais (usuario_id)',
+        'idx_diaria_data' => 'diarias (data)',
     ] as $nome => $alvo) {
         $comandos['indices'][] = "CREATE INDEX $nome ON $alvo";
     }
+    $comandos['colunas'] = [
+        ['usuarios', 'caminhao_padrao_id', "$ref NULL"],
+        ['usuarios', 'valor_diaria_centavos', "$dinheiro NULL"],
+        ['categorias', 'oculta_motorista', "$simNao NOT NULL DEFAULT 0"],
+        ['lancamentos', 'recebivel_id', "$ref NULL"],
+        ['avisos', 'para_usuario_id', "$ref NULL"],
+    ];
     return $comandos;
 }
 
-function semeia(PDO $pdo): void
+function semeia(PDO $pdo, array $novasColunas = []): void
 {
     $categorias = [
         ['Abastecimento',            'saida',   'fuel',     1, 0, 10],
         ['Salário do motorista',     'saida',   'salario',  0, 0, 20],
+        ['Diárias de motorista',     'saida',   'salario',  0, 0, 25],
         ['Manutenção',               'saida',   'wrench',   0, 0, 30],
         ['Pneus',                    'saida',   'tire',     0, 0, 40],
         ['Pedágio',                  'saida',   'road',     0, 0, 50],
@@ -325,6 +429,24 @@ function semeia(PDO $pdo): void
         foreach ($categorias as $c) {
             $nova->execute($c);
         }
+    } else {
+        $existe = $pdo->prepare('SELECT COUNT(*) FROM categorias WHERE nome = ? AND tipo = ?');
+        $existe->execute(['Diárias de motorista', 'saida']);
+        if ((int) $existe->fetchColumn() === 0) {
+            $pdo->prepare(
+                "INSERT INTO categorias (nome, tipo, icone, pede_litros, pede_descricao, ordem, ativo)
+                 VALUES ('Diárias de motorista', 'saida', 'salario', 0, 0, 25, 1)"
+            )->execute();
+        }
+    }
+
+    // Pagamento do motorista não aparece na lista de gastos dele.
+    if (in_array('categorias.oculta_motorista', $novasColunas, true)
+        || (int) $pdo->query('SELECT COUNT(*) FROM categorias WHERE oculta_motorista = 1')->fetchColumn() === 0) {
+        $pdo->exec(
+            "UPDATE categorias SET oculta_motorista = 1
+              WHERE tipo = 'saida' AND nome IN ('Salário do motorista', 'Diárias de motorista')"
+        );
     }
 
     $temAdmin = $pdo->query("SELECT COUNT(*) FROM usuarios WHERE papel = 'admin'")->fetchColumn();

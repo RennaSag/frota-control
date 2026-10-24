@@ -8,8 +8,8 @@ echo json_encode([
     'start_url' => './',
     'scope' => './',
     'display' => 'standalone',
-    'background_color' => '#f7f8fa',
-    'theme_color' => '#ffffff',
+    'background_color' => '#f4f6fb',
+    'theme_color' => '#4338ca',
     'icons' => [[
         'src' => 'assets/icone.svg',
         'sizes' => 'any',
