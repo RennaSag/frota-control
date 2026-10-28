@@ -156,31 +156,6 @@ cd frota
 FROTA_BANCO=sqlite php -S localhost:8000
 ```
 
-### Apache (XAMPP ou hospedagem)
-
-Copie `frota/` para a pasta pública. Sem configuração, o sistema usa MySQL em `127.0.0.1` e
-cria o banco `frota` sozinho.
-
-O usuário inicial é `admin`, com a senha definida em `FROTA_ADMIN_SENHA` (padrão `admin123`).
-Service worker e push exigem contexto seguro: HTTPS ou `localhost`.
-
-### Render
-
-`render.yaml` descreve o serviço Docker. Defina `DATABASE_URL` (PostgreSQL) e `FROTA_ADMIN_SENHA`.
-
-## Configuração
-
-| Variável | Padrão | Descrição |
-|---|---|---|
-| `DATABASE_URL` | | URL do PostgreSQL; quando presente, ativa o PostgreSQL |
-| `FROTA_BANCO` | `mysql` | `mysql`, `pgsql` ou `sqlite` |
-| `FROTA_MYSQL_HOST` / `_PORTA` / `_BANCO` / `_USUARIO` / `_SENHA` | `127.0.0.1` / `3306` / `frota` / `root` / vazio | Conexão MySQL |
-| `FROTA_SQLITE_ARQUIVO` | `frota/dados/frota.sqlite` | Arquivo SQLite |
-| `FROTA_ADMIN_SENHA` | `admin123` | Senha inicial do `admin` |
-| `FROTA_PUSH_CONTATO` | `mailto:contato@controle-frota.app` | Campo `sub` do VAPID |
-
-A versão do app fica em `$v` no `frota/index.php`. Ela versiona os assets e o service worker
-(`sw.js?v=`); subir o número força os aparelhos a renovar o cache.
 
 ## Estrutura
 
