@@ -4665,7 +4665,7 @@ async function telaDiarias(alvo) {
                   <div class="avatar-usuario-ajustes">${iniciais(m.nome)}</div>
                   <div class="dados-entidade-ajustes">
                     <strong>${esc(m.nome)}</strong>
-                    <small>${m.valor_diaria_centavos ? `Diária de ${dinheiro(m.valor_diaria_centavos)}` : 'Diária sem valor (defina em Ajustes)'}
+                    <small>${m.valor_diaria_centavos ? `Diária de ${dinheiro(m.valor_diaria_centavos)}` : 'Diária sem valor definido'}
                       • ${m.dias} ${m.dias === 1 ? 'dia' : 'dias'} • ${dinheiro(m.total_centavos)}</small>
                     <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
                       ${m.pago_centavos ? `<span class="tag-status-visivel">Pago ${dinheiro(m.pago_centavos)}</span>` : ''}
@@ -4675,6 +4675,9 @@ async function telaDiarias(alvo) {
                   </div>
                 </div>
                 <div class="acoes-entidade-ajustes">
+                  <button class="btn pequeno" type="button" data-valor-diaria="${m.usuario_id}">
+                    ${icone('editar')} Editar diária
+                  </button>
                   ${m.pendente_centavos ? `
                     <button class="btn principal pequeno" type="button" data-pagar="${m.usuario_id}">
                       ${icone('check')} Pagar ${dinheiro(m.pendente_centavos)}
@@ -4688,6 +4691,10 @@ async function telaDiarias(alvo) {
         const m = r.motoristas.find((x) => Number(x.usuario_id) === Number(b.dataset.pagar));
         const dias = r.itens.filter((d) => Number(d.usuario_id) === m.usuario_id && !d.pago).length;
         b.onclick = () => formPagamentoDiarias(m, r.mes, dias, atualiza);
+      });
+      caixaMotoristas.querySelectorAll('[data-valor-diaria]').forEach((b) => {
+        const m = r.motoristas.find((x) => Number(x.usuario_id) === Number(b.dataset.valorDiaria));
+        b.onclick = () => formValorDiaria(m, atualiza);
       });
     } else {
       caixaMotoristas.innerHTML = '';
@@ -4852,6 +4859,46 @@ function formDiaria(d, aoConcluir) {
       fechar();
       recado('Diária atualizada.');
     }
+    await aoConcluir?.();
+  });
+}
+
+function formValorDiaria(m, aoConcluir) {
+  const pendentes = m.dias_pendentes_geral || 0;
+  const { elemento, fechar } = janela(`Diária - ${m.nome}`, `
+    <form class="form-pilha" novalidate>
+      <div class="campo">
+        <label for="vd-valor">Valor da diária</label>
+        <div class="valor-caixa">
+          <span aria-hidden="true">R$</span>
+          <input id="vd-valor" name="valor_diaria" inputmode="decimal" placeholder="0,00"
+                 value="${esc(valorParaCampo(m.valor_diaria_centavos))}">
+        </div>
+        <p class="dica">Vale para os próximos dias lançados. Em branco, fica sem valor definido.</p>
+      </div>
+      ${pendentes ? `
+        <div class="campo">
+          <label class="caixa-marcar">
+            <input type="checkbox" name="aplicar_pendentes" value="1">
+            <span>Usar este valor também nas ${pendentes === 1 ? 'diária' : `${pendentes} diárias`} ainda não ${pendentes === 1 ? 'paga' : 'pagas'}
+              <small>Inclui as de outros meses. As já pagas não mudam.</small>
+            </span>
+          </label>
+        </div>` : ''}
+      <div class="acoes fim">
+        <button class="btn" type="button" data-cancelar>Cancelar</button>
+        <button class="btn principal" type="submit">Salvar</button>
+      </div>
+    </form>`);
+  const form = elemento.querySelector('form');
+  form.querySelector('[data-cancelar]').onclick = fechar;
+  aoEnviar(form, async (dados) => {
+    const r = await api('PUT', 'diaria-valor', { usuario_id: m.usuario_id }, dados);
+    estado.usuarios = await api('GET', 'usuarios');
+    fechar();
+    recado(r.atualizadas
+      ? `Diária atualizada (${r.atualizadas} ${r.atualizadas === 1 ? 'dia pendente ajustado' : 'dias pendentes ajustados'}).`
+      : 'Diária atualizada.');
     await aoConcluir?.();
   });
 }

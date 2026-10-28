@@ -161,6 +161,8 @@ function despacha(string $r, string $metodo)
             return rotaExcluiDiaria(campoId($q['id'] ?? null, 'Diária', true));
         case 'POST diarias-pagar':
             return rotaPagaDiarias();
+        case 'PUT diaria-valor':
+            return rotaValorDiaria(campoId($q['usuario_id'] ?? null, 'Motorista', true));
     }
     throw new ErroDeUso('Endereço não encontrado.', 404);
 }
@@ -2188,6 +2190,25 @@ function rotaEditaDiaria(int $id): array
     }
     atualiza('diarias', $id, $dados);
     return ['ok' => true];
+}
+
+// Muda a diária combinada do motorista direto pela aba Diárias; pode levar junto as que ainda não foram pagas.
+function rotaValorDiaria(int $usuarioId): array
+{
+    exigeAdmin();
+    $corpo = corpoJson();
+    if (umValor('SELECT id FROM usuarios WHERE id = ?', [$usuarioId]) === null) {
+        throw new ErroDeUso('Motorista não encontrado.', 404);
+    }
+    $valor = campoCentavosOpcional($corpo['valor_diaria'] ?? null, 'Valor da diária');
+    atualiza('usuarios', $usuarioId, ['valor_diaria_centavos' => $valor]);
+    $atualizadas = 0;
+    if ($valor !== null && campoSimNao($corpo['aplicar_pendentes'] ?? null, false)) {
+        $atualizadas = (int) umValor(
+            'SELECT COUNT(*) FROM diarias WHERE usuario_id = ? AND lancamento_id IS NULL', [$usuarioId]);
+        consulta('UPDATE diarias SET valor_centavos = ? WHERE usuario_id = ? AND lancamento_id IS NULL', [$valor, $usuarioId]);
+    }
+    return ['ok' => true, 'atualizadas' => $atualizadas];
 }
 
 function rotaExcluiDiaria(int $id): array
