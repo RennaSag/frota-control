@@ -1,8 +1,7 @@
 # Controle da Frota
 
 Sistema web de controle financeiro para frotas de caminhões: fretes, gastos, viagens, notas
-fiscais e diárias de motoristas, com dois níveis de acesso (motorista e proprietário). É um
-PWA instalável que funciona sem internet.
+fiscais e diárias de motoristas, com dois níveis de acesso (motorista e proprietário).
 
 ![PHP](https://img.shields.io/badge/PHP-8.x-777BB4?style=flat-square&logo=php&logoColor=white)
 ![JavaScript](https://img.shields.io/badge/JavaScript-ES2020-F7DF1E?style=flat-square&logo=javascript&logoColor=black)
