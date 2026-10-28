@@ -1074,8 +1074,10 @@ function camposLancamento(tipo, l = {}) {
     </div>`;
 }
 
+// Reduz a foto antes do envio (lado maior até 1600px) e grava em WebP. O Safari não gera WebP
+// no canvas (devolve PNG), então nesse caso vai em JPEG; o servidor converte para WebP de todo jeito.
 async function reduzFoto(arquivo) {
-  if (!/^image\/(jpeg|png|webp)$/.test(arquivo.type) || arquivo.size < 400 * 1024) return arquivo;
+  if (!/^image\/(jpeg|png|webp)$/.test(arquivo.type)) return arquivo;
   try {
     const imagem = await createImageBitmap(arquivo);
     const escala = Math.min(1, 1600 / Math.max(imagem.width, imagem.height));
@@ -1083,10 +1085,12 @@ async function reduzFoto(arquivo) {
     tela.width = Math.round(imagem.width * escala);
     tela.height = Math.round(imagem.height * escala);
     tela.getContext('2d').drawImage(imagem, 0, 0, tela.width, tela.height);
-    const blob = await new Promise((pronto) => tela.toBlob(pronto, 'image/jpeg', 0.8));
-    return blob && blob.size < arquivo.size
-      ? new File([blob], 'comprovante.jpg', { type: 'image/jpeg' })
-      : arquivo;
+    const gera = (tipo) => new Promise((pronto) => tela.toBlob(pronto, tipo, 0.8));
+    let blob = await gera('image/webp');
+    if (blob?.type !== 'image/webp') blob = await gera('image/jpeg');
+    if (!blob || blob.size >= arquivo.size) return arquivo;
+    const extensao = blob.type === 'image/webp' ? 'webp' : 'jpg';
+    return new File([blob], `comprovante.${extensao}`, { type: blob.type });
   } catch {
     return arquivo;
   }

@@ -1337,7 +1337,11 @@ function guardaComprovante(string $nome, string $temporario): void
         fclose($arquivo);
         return;
     }
-    if (!move_uploaded_file($temporario, pastaUploads() . '/' . $nome)) {
+    $destino = pastaUploads() . '/' . $nome;
+    $salvou = is_uploaded_file($temporario)
+        ? move_uploaded_file($temporario, $destino)
+        : rename($temporario, $destino);
+    if (!$salvou) {
         throw new ErroDeUso('Não foi possível salvar a foto no servidor.', 500);
     }
 }
@@ -1395,9 +1399,85 @@ function rotaEnviaComprovante(): array
         throw new ErroDeUso('Envie uma foto (JPG, PNG, WEBP) ou um PDF.');
     }
 
+    $temporario = $arquivo['tmp_name'];
+    $convertido = null;
+    if ($extensao !== 'pdf') {
+        $convertido = convertePraWebp($temporario, $imagem);
+        if ($convertido !== null) {
+            $temporario = $convertido;
+            $extensao = 'webp';
+        }
+    }
+
     $nome = date('YmdHis') . '-' . bin2hex(random_bytes(5)) . '.' . $extensao;
-    guardaComprovante($nome, $arquivo['tmp_name']);
+    try {
+        guardaComprovante($nome, $temporario);
+    } finally {
+        if ($convertido !== null && is_file($convertido)) {
+            @unlink($convertido);
+        }
+    }
     return ['comprovante' => $nome];
+}
+
+// Reduz a foto (lado maior até 1600px), acerta a rotação do celular e regrava em WebP, o que
+// também descarta os metadados (EXIF, GPS). Devolve o arquivo temporário novo, ou null se o
+// servidor não tem suporte a WebP — aí a foto é guardada como chegou.
+function convertePraWebp(string $caminho, array $info): ?string
+{
+    if (!function_exists('imagewebp')) {
+        return null;
+    }
+    [$largura, $altura, $tipo] = $info;
+    if ($largura * $altura > 40_000_000) {
+        throw new ErroDeUso('A foto tem resolução grande demais. Tente uma foto menor.');
+    }
+
+    $imagem = match ($tipo) {
+        IMAGETYPE_JPEG => @imagecreatefromjpeg($caminho),
+        IMAGETYPE_PNG => @imagecreatefrompng($caminho),
+        IMAGETYPE_WEBP => @imagecreatefromwebp($caminho),
+        default => false,
+    };
+    if ($imagem === false) {
+        throw new ErroDeUso('Não foi possível ler a foto. Tente outra.');
+    }
+
+    if ($tipo === IMAGETYPE_JPEG && function_exists('exif_read_data')) {
+        $graus = [3 => 180, 6 => -90, 8 => 90][(int) (@exif_read_data($caminho)['Orientation'] ?? 1)] ?? 0;
+        if ($graus !== 0) {
+            $girada = imagerotate($imagem, $graus, 0);
+            if ($girada !== false) {
+                imagedestroy($imagem);
+                $imagem = $girada;
+            }
+        }
+    }
+
+    imagepalettetotruecolor($imagem);
+    $largura = imagesx($imagem);
+    $altura = imagesy($imagem);
+    $escala = min(1, 1600 / max($largura, $altura));
+    if ($escala < 1) {
+        $menor = imagescale($imagem, (int) round($largura * $escala), (int) round($altura * $escala), IMG_BICUBIC);
+        if ($menor !== false) {
+            imagedestroy($imagem);
+            $imagem = $menor;
+        }
+    }
+    imagealphablending($imagem, false);
+    imagesavealpha($imagem, true);
+
+    $destino = tempnam(sys_get_temp_dir(), 'foto');
+    $ok = $destino !== false && imagewebp($imagem, $destino, 80);
+    imagedestroy($imagem);
+    if (!$ok) {
+        if ($destino !== false) {
+            @unlink($destino);
+        }
+        throw new ErroDeUso('Não foi possível processar a foto no servidor.', 500);
+    }
+    return $destino;
 }
 
 // O arquivo é do motorista se está num lançamento dele, numa nota que ele enviou ou numa nota

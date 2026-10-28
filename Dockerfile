@@ -1,8 +1,9 @@
 FROM php:8.3-apache
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libpq-dev \
- && docker-php-ext-install pdo_pgsql \
+ && apt-get install -y --no-install-recommends libpq-dev libjpeg62-turbo-dev libpng-dev libwebp-dev \
+ && docker-php-ext-configure gd --with-jpeg --with-webp \
+ && docker-php-ext-install pdo_pgsql gd exif \
  && rm -rf /var/lib/apt/lists/*
 
 RUN a2enmod headers \
@@ -12,6 +13,7 @@ RUN { \
       echo 'date.timezone = America/Sao_Paulo'; \
       echo 'upload_max_filesize = 10M'; \
       echo 'post_max_size = 12M'; \
+      echo 'memory_limit = 256M'; \
       echo 'expose_php = Off'; \
     } > /usr/local/etc/php/conf.d/frota.ini
 
