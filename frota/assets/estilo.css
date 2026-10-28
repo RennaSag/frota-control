@@ -2952,3 +2952,74 @@ body.tela-entrada {
 }
 
 .tela-login .campo + .campo { margin-top: 14px; }
+
+/* Sem internet: faixa no topo e relógio com o que ficou guardado no aparelho */
+.faixa-offline {
+  display: none;
+  margin: 8px 16px 0;
+  padding: 8px 14px;
+  border-radius: var(--raio-s);
+  background: var(--ambar-suave);
+  color: var(--ambar-hover);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+body.sem-internet .faixa-offline {
+  display: block;
+}
+
+.sino.fila-aparelho {
+  color: var(--ambar-hover);
+  border-color: rgba(245, 158, 11, 0.4);
+  background: var(--ambar-suave);
+}
+
+.sino.fila-aparelho .contador {
+  background: var(--ambar);
+}
+
+.sino.fila-aparelho.com-erro .contador {
+  background: var(--vermelho);
+}
+
+.lista-fila {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.item-fila {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-s);
+  background: var(--superficie-2);
+}
+
+.item-fila > div {
+  min-width: 0;
+}
+
+.item-fila strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.item-fila small {
+  color: var(--tinta-3);
+}
+
+.item-fila .aviso {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+}
+
+.item-fila.com-erro {
+  border-color: rgba(244, 63, 94, 0.35);
+}

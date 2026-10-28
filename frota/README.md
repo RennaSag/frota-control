@@ -75,10 +75,39 @@ Enquanto o site roda no XAMPP do seu computador, o celular precisa estar no
 Se o celular não abrir, o Firewall do Windows está bloqueando: libere o
 `httpd.exe` (Apache) para a rede privada.
 
+> Pelo endereço `http://192.168...` o app abre, mas **não funciona sem internet nem
+> recebe notificações**: o navegador só libera isso em sites com **https**. Na
+> hospedagem (com https) tudo funciona.
+
 Para os motoristas lançarem gastos **na estrada**, o site precisa ficar numa
 hospedagem na internet — veja "Levar para a internet" no fim deste arquivo.
 
 ---
+
+## Aplicativo no celular, sem internet e notificações
+
+Com o site em **https**, ele vira um aplicativo de verdade (PWA):
+
+- **Instalar** — Android/computador: **Perfil/Ajustes → Instalar agora** (ou o menu do
+  Chrome → *Instalar app*). iPhone: abra no **Safari** → **Compartilhar** →
+  **Adicionar à Tela de Início**, e use sempre pelo ícone.
+- **Sem internet** — o app abre mesmo sem sinal, mostrando os últimos dados vistos (uma
+  faixa amarela avisa). Gastos, viagens novas, encerrar viagem, notas fiscais (com a foto)
+  e dias trabalhados ficam **guardados no aparelho**; um relógio amarelo no topo mostra
+  quantos. Quando o sinal volta eles são enviados sozinhos, na ordem (um gasto lançado numa
+  viagem aberta sem sinal vai ligado a ela). No Android o envio acontece até com o app
+  fechado. Editar e excluir precisam de internet. Se o servidor recusar algum registro, ele
+  fica marcado em vermelho no relógio para corrigir ou descartar.
+- **Notificações** — **Perfil/Ajustes → Ativar notificações** em cada aparelho. O
+  proprietário recebe o que os motoristas registram; o motorista recebe viagem aberta para
+  ele e diárias pagas. Chegam com o app fechado (Android, computador e iPhone com iOS 16.4
+  ou mais novo, **com o app instalado na tela de início**). O número de avisos aparece
+  também no ícone do app.
+- **Atalhos** — segurando o ícone (Android): Registrar gasto, Nova viagem, Nota, Diária.
+- **Compartilhar** — no Android, uma foto ou PDF de outro app (galeria, WhatsApp) pode ser
+  compartilhada direto para o app, como nota fiscal ou comprovante de gasto.
+- **Sair da conta** apaga do aparelho os dados guardados e desliga as notificações daquela
+  conta (precisa de internet; se houver algo ainda não enviado, o app avisa antes).
 
 ## Como o motorista usa
 
@@ -216,13 +245,17 @@ com PHP 8 e MySQL (qualquer hospedagem compartilhada comum serve):
 index.php              página única que carrega as telas
 api.php                porta de entrada da API (api.php?r=rota)
 config.php             configuração
-manifest.php           dados do "aplicativo" no celular
+manifest.php           dados do "aplicativo" no celular (ícones, atalhos, compartilhar)
+sw.js                  service worker: abre sem internet, envia a fila, mostra os pushes
 src/banco.php          conexão e criação das tabelas (MySQL e SQLite)
 src/sessao.php         login, sessão e níveis de acesso
 src/util.php           validação dos campos (valores, datas, números)
+src/push.php           notificações push (Web Push/VAPID, sem bibliotecas)
+src/fila.php           envios repetidos da fila do aparelho não gravam duas vezes
 src/rotas.php          todas as rotas da API
 assets/estilo.css      aparência (tema claro e escuro, pensado para celular)
 assets/app.js          telas, formulários e gráficos
+assets/fila.js         fila de envios feitos sem internet (IndexedDB), usada também pelo sw.js
 uploads/               fotos das notas (protegida: só sai pela API, com login)
 dados/                 banco em arquivo, se usar o modo SQLite
 ```
@@ -245,5 +278,17 @@ Notas de implementação:
   menos a soma das entradas com aquele `recebivel_id`. Assim não há como desencontrar.
 - **Prazo do motorista:** `MINUTOS_PARA_CORRIGIR` em `src/rotas.php` (o servidor decide;
   a tela só mostra o tempo que falta).
+- **Sem internet:** o `sw.js` guarda a casca do app e a última resposta de cada consulta
+  da API (cache `frota-dados`, apagado ao sair ou entrar com outra conta). O que é gravado
+  sem sinal vai para o IndexedDB (`assets/fila.js`); fotos e viagens criadas offline usam
+  ids `local:...`, trocados pelos verdadeiros na hora do envio. Cada envio leva o cabeçalho
+  `X-Fila-Id` e o servidor guarda a resposta em `envios_fila`, então um reenvio devolve a
+  mesma resposta em vez de gravar de novo.
+- **Versão do app:** `$v` em `index.php`. Ao subir o número, os aparelhos baixam a nova
+  versão e refazem o cache (o `sw.js` é registrado como `sw.js?v=...`).
+- **Push:** as chaves VAPID são criadas sozinhas na primeira vez (tabela `configuracoes`).
+  O contato enviado ao Google/Apple fica em `PUSH_CONTATO` (`config.php` ou variável
+  `FROTA_PUSH_CONTATO`). Precisa do OpenSSL no PHP (já vem no XAMPP e na imagem Docker).
+  Os pushes saem depois que a resposta foi entregue, para ninguém esperar por eles.
 - Gráficos em HTML e CSS puro, sem bibliotecas externas: o sistema funciona
   mesmo sem internet, dentro da rede da empresa.

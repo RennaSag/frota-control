@@ -3,6 +3,7 @@ window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredInstallPrompt = e;
 });
+window.addEventListener('appinstalled', () => { deferredInstallPrompt = null; });
 
 const app = document.getElementById('app');
 
@@ -149,16 +150,51 @@ function endereco(rota, params = {}) {
   return `api.php?${p}`;
 }
 
+const SEM_INTERNET = 'Sem internet. Tente de novo quando o sinal voltar.';
+const GUARDADO_OFFLINE = 'Sem internet: ficou guardado no aparelho e será enviado sozinho quando o sinal voltar.';
+
+function erroSemInternet(mensagem = SEM_INTERNET) {
+  const erro = new Error(mensagem);
+  erro.offline = true;
+  return erro;
+}
+
+function tempoLimite(ms) {
+  if (AbortSignal.timeout) return AbortSignal.timeout(ms);
+  const controle = new AbortController();
+  setTimeout(() => controle.abort(), ms);
+  return controle.signal;
+}
+
+// Gastos, viagens, notas e diárias feitos sem internet vão para a fila do aparelho (assets/fila.js)
+// e a tela recebe { offline: true, id: 'local:...' }. Cada envio leva um X-Fila-Id: se a resposta
+// se perder no caminho, o reenvio pela fila não grava duas vezes.
 async function api(metodo, rota, params = {}, corpo = null) {
-  const resposta = await fetch(endereco(rota, params), {
-    method: metodo,
-    headers: {
-      'X-App-Frota': '1',
-      ...(corpo ? { 'Content-Type': 'application/json' } : {}),
-    },
-    credentials: 'same-origin',
-    body: corpo ? JSON.stringify(corpo) : undefined,
-  });
+  const podeEsperar = metodo === 'POST' && Fila.ROTAS.includes(rota) && Boolean(estado.usuario);
+  const filaId = podeEsperar ? Fila.novoId() : null;
+  if (podeEsperar && (navigator.onLine === false || Fila.refsLocais([params, corpo]).size)) {
+    return guardaNaFila(filaId, rota, params, corpo);
+  }
+  let resposta;
+  try {
+    resposta = await fetch(endereco(rota, params), {
+      method: metodo,
+      headers: {
+        'X-App-Frota': '1',
+        ...(filaId ? { 'X-Fila-Id': filaId } : {}),
+        ...(corpo ? { 'Content-Type': 'application/json' } : {}),
+      },
+      credentials: 'same-origin',
+      body: corpo ? JSON.stringify(corpo) : undefined,
+      signal: podeEsperar ? tempoLimite(20000) : undefined,
+    });
+  } catch {
+    if (podeEsperar) return guardaNaFila(filaId, rota, params, corpo);
+    marcaOffline(true);
+    throw erroSemInternet();
+  }
+  const offline = resposta.headers.get('X-Frota-Offline');
+  if (metodo === 'GET') marcaOffline(Boolean(offline));
   if (resposta.status === 401 && estado.usuario) {
     estado.usuario = null;
     telaLogin('Sua sessão expirou. Entre novamente.');
@@ -171,22 +207,33 @@ async function api(metodo, rota, params = {}, corpo = null) {
   } catch {
     throw new Error('O servidor respondeu de forma inesperada. Veja se o PHP está rodando.');
   }
+  if (offline === 'vazio') throw erroSemInternet(dados?.erro);
   if (!resposta.ok) throw new Error(dados?.erro || 'Não foi possível concluir.');
   return dados;
 }
 
 // Envia foto ou PDF (nota, cupom, comprovante) e devolve o nome guardado no servidor.
+// Sem internet, o arquivo fica no aparelho e o retorno é uma referência "local:..." que a fila troca
+// pelo nome verdadeiro na hora de enviar.
 async function enviaArquivo(arquivo) {
   const reduzido = await reduzFoto(arquivo);
   if (reduzido.size > 8 * 1024 * 1024) throw new Error('O arquivo é muito grande (máximo 8 MB).');
+  const id = Fila.novoId();
+  if (navigator.onLine === false) return Fila.guardaArquivo(reduzido, reduzido.name, id);
   const corpo = new FormData();
   corpo.append('foto', reduzido);
-  const resposta = await fetch(endereco('comprovante'), {
-    method: 'POST',
-    headers: { 'X-App-Frota': '1' },
-    credentials: 'same-origin',
-    body: corpo,
-  });
+  let resposta;
+  try {
+    resposta = await fetch(endereco('comprovante'), {
+      method: 'POST',
+      headers: { 'X-App-Frota': '1', 'X-Fila-Id': id },
+      credentials: 'same-origin',
+      body: corpo,
+      signal: tempoLimite(45000),
+    });
+  } catch {
+    return Fila.guardaArquivo(reduzido, reduzido.name, id);
+  }
   let dados = null;
   try { dados = await resposta.json(); } catch { /* resposta vazia */ }
   if (!resposta.ok) throw new Error(dados?.erro || 'Não foi possível enviar o arquivo.');
@@ -212,7 +259,9 @@ function ligaArquivo(form, idCampo, nomeOculto, textoVazio) {
     aviso.classList.remove('oculto');
     try {
       oculto.value = await enviaArquivo(arquivo);
-      aviso.textContent = 'Arquivo anexado.';
+      aviso.textContent = Fila.ehLocal(oculto.value)
+        ? 'Sem internet: arquivo guardado no aparelho. Vai junto quando o sinal voltar.'
+        : 'Arquivo anexado.';
     } catch (erro) {
       aviso.classList.add('oculto');
       campo.value = '';
@@ -378,6 +427,8 @@ function telaLogin(mensagem) {
   aoEnviar(app.querySelector('form'), async (dados) => {
     if (!dados.usuario?.trim() || !dados.senha) throw new Error('Preencha usuário e senha.');
     estado.usuario = await api('POST', 'login', {}, dados);
+    // Dados guardados de outra conta neste aparelho não podem aparecer para quem entrou.
+    try { await caches.delete(Fila.CACHE_DADOS); } catch { /* sem Cache Storage */ }
     await iniciaApp();
   });
 }
@@ -412,6 +463,12 @@ async function iniciaApp() {
   if (!abas().some((a) => a.id === estado.aba)) estado.aba = abas()[0].id;
   desenhaEstrutura();
   await abreAba(estado.aba);
+  Fila.defineMeta('usuario', estado.usuario.id).catch(() => {});
+  navigator.storage?.persist?.().catch(() => {});
+  atualizaFila();
+  sincroniza();
+  sincronizaPush();
+  executaAcaoDaUrl();
 }
 
 function desenhaEstrutura() {
@@ -459,6 +516,9 @@ function desenhaEstrutura() {
             </div>
           </div>
           <div class="acoes-topo">
+            <button class="sino fila-aparelho oculto" type="button" id="b-fila" aria-label="Guardado no aparelho">
+              ${svg('relogio')}<span class="contador" aria-hidden="true"></span>
+            </button>
             <button class="sino" type="button" id="b-avisos" aria-label="Notificações e Avisos">
               ${svg('sino')}<span class="contador oculto" aria-hidden="true"></span>
             </button>
@@ -468,6 +528,9 @@ function desenhaEstrutura() {
           </div>
         </header>
 
+        <div class="faixa-offline" role="status">
+          Sem internet. Mostrando os últimos dados salvos; o que você registrar fica guardado e é enviado quando o sinal voltar.
+        </div>
         <main id="conteudo"><p class="carregando">Carregando…</p></main>
       </div>
 
@@ -507,15 +570,13 @@ function desenhaEstrutura() {
 
   const sino = document.getElementById('b-avisos');
   if (sino) sino.onclick = abreAvisos;
+  document.getElementById('b-fila').onclick = abreFila;
 
   const bSair = document.getElementById('b-sair-sidebar');
   if (bSair) {
     bSair.onclick = async () => {
       if (!confirm('Tem certeza de que deseja sair da conta?')) return;
-      try { await api('POST', 'logout'); } catch {}
-      estado.usuario = null;
-      estado.aba = null;
-      telaLogin('Você saiu da conta.');
+      await saiDaConta();
     };
   }
 
@@ -598,13 +659,25 @@ async function recarregaBasico() {
     api('GET', 'categorias'),
     api('GET', 'caminhoes'),
     api('GET', 'usuarios'),
-    api('GET', 'viagens', { status: 'aberta', limite: 100 }),
+    carregaViagensAbertas(),
     ehAdmin() ? recarregaRecebiveisAbertos() : null,
   ]);
   estado.categorias = categorias;
   estado.caminhoes = caminhoes;
   estado.usuarios = usuarios;
   estado.viagensAbertas = viagens;
+}
+
+// Viagens abertas no servidor mais as abertas sem internet que ainda estão na fila do aparelho.
+async function carregaViagensAbertas() {
+  const doServidor = await api('GET', 'viagens', { status: 'aberta', limite: 100 });
+  let naFila = [];
+  try {
+    naFila = (await Fila.lista(estado.usuario.id))
+      .filter((e) => e.rota === 'viagens' && !e.erro)
+      .map((e) => ({ id: e.ref, origem: e.corpo.origem, destino: e.corpo.destino, inicio: e.corpo.inicio }));
+  } catch { /* sem IndexedDB */ }
+  return [...doServidor, ...naFila];
 }
 
 // Fretes em aberto, para o proprietário ligar uma entrada ao frete que está sendo pago.
@@ -651,10 +724,14 @@ function mostraContador(n) {
   contador.classList.toggle('oculto', !n);
   document.getElementById('b-avisos').setAttribute('aria-label',
     n ? `Avisos: ${n} ${n === 1 ? 'novo' : 'novos'}` : 'Avisos');
+  // Número no ícone do app instalado (Android, computador e iPhone com notificações ativas).
+  if (navigator.setAppBadge) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
 
 async function notificaAparelho(texto) {
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  // Com push ativo, o aviso já chega pelo service worker; não repete.
+  try { if (await inscricaoPush()) return; } catch { /* segue com o aviso local */ }
   const titulo = window.NOME_SISTEMA || 'Controle da Frota';
   const opcoes = { body: texto, icon: 'assets/logo.png', tag: 'frota-avisos' };
   try {
@@ -708,7 +785,8 @@ async function abreAvisos() {
     recado('Não foi possível carregar as notificações.');
     return;
   }
-  const podePedir = 'Notification' in window && Notification.permission === 'default';
+  const podePedir = (await situacaoPush()) === 'inativo';
+  if (podePedir) buscaChaveVapid().catch(() => {});
   const naoLidosOriginais = new Set(r.itens.filter((a) => a.novo).map((a) => a.id));
   let filtroAvisos = 'todos';
 
@@ -836,10 +914,12 @@ async function abreAvisos() {
 
   elemento.querySelector('[data-permitir]')?.addEventListener('click', async (e) => {
     const caixa = e.target.closest('.aviso');
-    const resposta = await Notification.requestPermission();
-    caixa.textContent = resposta === 'granted'
-      ? 'Notificações ativadas neste aparelho.'
-      : 'Notificações bloqueadas no navegador. Os avisos continuam aparecendo aqui.';
+    try {
+      await ativaPush();
+      caixa.textContent = 'Notificações ativadas neste aparelho, mesmo com o app fechado.';
+    } catch (erro) {
+      caixa.textContent = `${erro.message} Os avisos continuam aparecendo aqui.`;
+    }
   });
 
   ligaItens(container);
@@ -851,6 +931,419 @@ async function abreAvisos() {
       r.nao_lidos = 0;
     } catch {}
   }
+}
+
+// ---------------------------------------------------------------------------
+// Sem internet: fila do aparelho, faixa de aviso e envio quando o sinal volta
+// ---------------------------------------------------------------------------
+
+const fila = { timer: null, sincronizando: null };
+
+function marcaOffline(semInternet) {
+  document.body.classList.toggle('sem-internet', Boolean(semInternet));
+}
+
+window.addEventListener('offline', () => marcaOffline(true));
+window.addEventListener('online', () => {
+  marcaOffline(false);
+  sincroniza();
+});
+
+function resumoDoEnvio(rota, corpo = {}) {
+  const c = corpo || {};
+  if (rota === 'lancamentos') {
+    const cat = estado.categorias.find((x) => String(x.id) === String(c.categoria_id));
+    return [cat?.nome || 'Lançamento', c.valor ? `R$ ${c.valor}` : '', c.data ? dataCurta(c.data) : '']
+      .filter(Boolean).join(' · ');
+  }
+  if (rota === 'viagens') return `Viagem ${c.origem || ''} → ${c.destino || ''}`;
+  if (rota === 'viagem-encerrar') return `Encerrar viagem${c.fim ? ` (chegada ${dataCurta(c.fim)})` : ''}`;
+  if (rota === 'notas') return `Nota fiscal${c.numero ? ` nº ${c.numero}` : ''}${c.cliente ? ` · ${c.cliente}` : ''}`;
+  if (rota === 'diarias') {
+    return `Dia trabalhado ${dataCurta(c.de)}${c.ate && c.ate !== c.de ? ` a ${dataCurta(c.ate)}` : ''}`;
+  }
+  return rota;
+}
+
+async function guardaNaFila(id, rota, params, corpo) {
+  const envio = await Fila.adiciona({
+    id, usuarioId: estado.usuario.id, rota, params, corpo, resumo: resumoDoEnvio(rota, corpo),
+  });
+  pedeSincronizacao();
+  // Com internet (só a foto tinha ficado no aparelho): tenta enviar agora mesmo.
+  if (navigator.onLine !== false) {
+    const r = await sincroniza({ silencioso: true });
+    if (r?.respostas?.[envio.id]) return r.respostas[envio.id];
+    const recusado = (await Fila.lista(estado.usuario.id)).find((e) => e.id === envio.id && e.erro);
+    if (recusado) {
+      await Fila.remove(envio.id);
+      await atualizaFila();
+      throw new Error(recusado.erro);
+    }
+  }
+  await atualizaFila();
+  return { offline: true, id: envio.ref };
+}
+
+// Android: pede ao navegador para enviar a fila quando a internet voltar, mesmo com o app fechado.
+function pedeSincronizacao() {
+  navigator.serviceWorker?.ready
+    .then((registro) => registro.sync?.register('frota-fila'))
+    .catch(() => {});
+}
+
+async function sincroniza({ silencioso = false } = {}) {
+  if (!estado.usuario) return null;
+  if (fila.sincronizando) return fila.sincronizando;
+  fila.sincronizando = (async () => {
+    let r = null;
+    try {
+      r = await Fila.processa(estado.usuario.id);
+    } catch {
+      return null;
+    }
+    if (silencioso) await atualizaFila();
+    else await aoSincronizar(r);
+    return r;
+  })();
+  try {
+    return await fila.sincronizando;
+  } finally {
+    fila.sincronizando = null;
+  }
+}
+
+async function aoSincronizar(r) {
+  await atualizaFila();
+  if (!r || !estado.usuario) return;
+  if (r.sessao) {
+    estado.usuario = null;
+    telaLogin('Sua sessão expirou. Entre de novo para enviar o que ficou guardado no aparelho.');
+    return;
+  }
+  if (r.enviados) {
+    recado(r.enviados === 1
+      ? 'O registro guardado sem internet foi enviado.'
+      : `${r.enviados} registros guardados sem internet foram enviados.`);
+    try { await recarregaBasico(); } catch { /* fica com o que já tinha */ }
+    if (!document.querySelector('.janela')) abreAba(estado.aba);
+  }
+  if (r.erros) recado('Algum registro guardado no aparelho não foi aceito. Toque no relógio, no topo, para ver.');
+}
+
+async function atualizaFila() {
+  const botao = document.getElementById('b-fila');
+  if (!botao || !estado.usuario) return;
+  let itens = [];
+  try { itens = await Fila.lista(estado.usuario.id); } catch { /* sem IndexedDB */ }
+  botao.classList.toggle('oculto', !itens.length);
+  botao.classList.toggle('com-erro', itens.some((e) => e.erro));
+  botao.querySelector('.contador').textContent = itens.length > 99 ? '99+' : String(itens.length);
+  botao.setAttribute('aria-label', `${itens.length} ${itens.length === 1 ? 'registro guardado' : 'registros guardados'} no aparelho`);
+  if (itens.length && !fila.timer) {
+    fila.timer = setInterval(() => {
+      if (navigator.onLine !== false && !document.hidden) sincroniza();
+    }, 45000);
+  } else if (!itens.length && fila.timer) {
+    clearInterval(fila.timer);
+    fila.timer = null;
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && estado.usuario && navigator.onLine !== false) sincroniza();
+});
+
+async function abreFila() {
+  const itens = await Fila.lista(estado.usuario.id);
+  const { elemento, fechar } = janela('Guardado no aparelho', `
+    <p class="ajuda" style="margin-top:0">
+      Registrado sem internet. É enviado sozinho quando o sinal voltar; não feche a conta antes disso.
+    </p>
+    ${itens.length ? `
+      <div class="lista-fila">
+        ${itens.map((e) => `
+          <div class="item-fila ${e.erro ? 'com-erro' : ''}">
+            <div>
+              <strong>${esc(e.resumo)}</strong>
+              <small>Guardado ${quandoAviso((Date.now() - e.criadoEm) / 1000)}</small>
+              ${e.erro ? `<p class="aviso erro">${esc(e.erro)}</p>` : ''}
+            </div>
+            <button class="btn pequeno perigo" type="button" data-descartar="${esc(e.id)}">Descartar</button>
+          </div>`).join('')}
+      </div>
+      <div class="acoes fim" style="margin-top:16px">
+        <button class="btn principal" type="button" data-enviar>Enviar agora</button>
+      </div>` : '<div class="vazio">Nada esperando envio.</div>'}`);
+
+  elemento.querySelector('[data-enviar]')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'Enviando…';
+    await Fila.tentaDeNovo(estado.usuario.id);
+    const r = await sincroniza();
+    fechar();
+    if (r?.semRede) recado('Ainda sem internet. Fica guardado e vai sozinho quando o sinal voltar.');
+    if ((await Fila.lista(estado.usuario.id)).length) abreFila();
+  });
+  elemento.querySelectorAll('[data-descartar]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Descartar este registro? Ele não será enviado.')) return;
+      await Fila.remove(b.dataset.descartar);
+      await atualizaFila();
+      fechar();
+      estado.viagensAbertas = await carregaViagensAbertas().catch(() => estado.viagensAbertas);
+      if ((await Fila.lista(estado.usuario.id)).length) abreFila();
+    };
+  });
+}
+
+// Sair apaga deste aparelho os dados guardados e desliga as notificações desta conta.
+async function saiDaConta() {
+  if (navigator.onLine === false) {
+    recado('Para sair da conta, conecte-se à internet.');
+    return;
+  }
+  const pendentes = await Fila.lista(estado.usuario.id).catch(() => []);
+  if (pendentes.length && !confirm(
+    `${pendentes.length === 1 ? 'Há 1 registro guardado' : `Há ${pendentes.length} registros guardados`} no aparelho `
+    + 'que ainda não foram enviados. Se sair agora, eles serão perdidos. Sair mesmo assim?'
+  )) return;
+  try {
+    const inscricao = await inscricaoPush();
+    if (inscricao) await api('POST', 'push-cancelar', {}, { endpoint: inscricao.endpoint });
+  } catch { /* segue saindo */ }
+  try {
+    await api('POST', 'logout');
+  } catch (erro) {
+    recado(erro.message);
+    return;
+  }
+  for (const e of pendentes) await Fila.remove(e.id).catch(() => {});
+  await Fila.defineMeta('usuario', null).catch(() => {});
+  try { await caches.delete(Fila.CACHE_DADOS); } catch { /* sem Cache Storage */ }
+  navigator.clearAppBadge?.().catch(() => {});
+  estado.usuario = null;
+  estado.aba = null;
+  telaLogin('Você saiu da conta.');
+}
+
+// ---------------------------------------------------------------------------
+// Instalação e notificações push (Android, computador e iPhone)
+// ---------------------------------------------------------------------------
+
+const ehIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const appInstalado = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const pushSuportado = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+let chaveVapid = null;
+
+async function buscaChaveVapid() {
+  if (chaveVapid === null) chaveVapid = (await api('GET', 'push-chave')).chave || '';
+  return chaveVapid;
+}
+
+function bytesDaChave(b64) {
+  const texto = atob(b64.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (b64.length % 4)) % 4));
+  return Uint8Array.from(texto, (c) => c.charCodeAt(0));
+}
+
+async function inscricaoPush() {
+  if (!pushSuportado()) return null;
+  const registro = await navigator.serviceWorker.getRegistration();
+  return registro ? registro.pushManager.getSubscription() : null;
+}
+
+// 'ativo' | 'inativo' | 'bloqueado' | 'instalar-ios' | 'sem-https' | 'sem-suporte'
+async function situacaoPush() {
+  if (!window.isSecureContext) return 'sem-https';
+  // No iPhone o push só existe com o app aberto pelo ícone da tela de início (iOS 16.4+).
+  if (!pushSuportado()) return ehIOS && !appInstalado() ? 'instalar-ios' : 'sem-suporte';
+  if (Notification.permission === 'denied') return 'bloqueado';
+  try {
+    return (await inscricaoPush()) ? 'ativo' : 'inativo';
+  } catch {
+    return 'inativo';
+  }
+}
+
+// Precisa vir de um toque na tela (exigência do iPhone): o pedido de permissão vem primeiro.
+async function ativaPush() {
+  const permissao = await Notification.requestPermission();
+  if (permissao !== 'granted') {
+    throw new Error('As notificações foram bloqueadas. Libere nas configurações do celular ou do navegador.');
+  }
+  const chave = await buscaChaveVapid();
+  if (!chave) throw new Error('O servidor ainda não consegue enviar notificações (falta o OpenSSL no PHP).');
+  const registro = await navigator.serviceWorker.ready;
+  let inscricao = await registro.pushManager.getSubscription();
+  if (!inscricao) {
+    inscricao = await registro.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytesDaChave(chave) });
+  }
+  await api('POST', 'push-inscrever', {}, inscricao.toJSON());
+}
+
+async function desativaPush() {
+  const inscricao = await inscricaoPush();
+  if (!inscricao) return;
+  try { await api('POST', 'push-cancelar', {}, { endpoint: inscricao.endpoint }); } catch { /* sai do aparelho mesmo assim */ }
+  await inscricao.unsubscribe();
+}
+
+// Ao abrir o app: o servidor fica sabendo que este aparelho é de quem entrou. Se a chave do
+// servidor mudou (banco novo), refaz a inscrição com a chave nova.
+async function sincronizaPush() {
+  try {
+    let inscricao = await inscricaoPush();
+    if (!inscricao || Notification.permission !== 'granted' || navigator.onLine === false) return;
+    const chave = await buscaChaveVapid();
+    const atual = inscricao.options?.applicationServerKey;
+    if (chave && atual && new Uint8Array(atual).join() !== bytesDaChave(chave).join()) {
+      await inscricao.unsubscribe();
+      const registro = await navigator.serviceWorker.ready;
+      inscricao = await registro.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytesDaChave(chave) });
+    }
+    await api('POST', 'push-inscrever', {}, inscricao.toJSON());
+  } catch { /* tenta de novo na próxima abertura */ }
+}
+
+function cartoesDoAparelho() {
+  return `
+    <div class="cartao" id="cartao-instalar">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="icone-kpi azul icone-instalar">${icone('celular')}</div>
+        <div>
+          <h2 style="margin:0 0 2px">Aplicativo no celular</h2>
+          <p class="ajuda" style="margin:0" data-texto-instalar></p>
+        </div>
+      </div>
+      <div class="acoes" style="margin-top:12px" data-acoes-instalar></div>
+    </div>
+
+    <div class="cartao" id="cartao-push">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="icone-kpi azul icone-instalar">${icone('sino')}</div>
+        <div>
+          <h2 style="margin:0 0 2px">Notificações neste aparelho</h2>
+          <p class="ajuda" style="margin:0" data-texto-push></p>
+        </div>
+      </div>
+      <div class="acoes" style="margin-top:12px" data-acoes-push></div>
+    </div>`;
+}
+
+function ligaCartoesDoAparelho(alvo) {
+  const instalar = alvo.querySelector('#cartao-instalar');
+  const push = alvo.querySelector('#cartao-push');
+  if (!instalar || !push) return;
+
+  const textoInstalar = instalar.querySelector('[data-texto-instalar]');
+  const acoesInstalar = instalar.querySelector('[data-acoes-instalar]');
+  if (appInstalado()) {
+    textoInstalar.textContent = 'O app está instalado neste aparelho e funciona mesmo sem internet.';
+  } else if (!window.isSecureContext) {
+    textoInstalar.textContent = 'Para instalar e usar sem internet, o site precisa abrir com https:// (na hospedagem).';
+  } else if (deferredInstallPrompt) {
+    textoInstalar.textContent = 'Instale para abrir pelo ícone, em tela cheia, e registrar gastos mesmo sem sinal.';
+    acoesInstalar.innerHTML = `<button class="btn principal" type="button" data-instalar>${icone('adicionar')} Instalar agora</button>`;
+    acoesInstalar.querySelector('[data-instalar]').onclick = async () => {
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      acoesInstalar.innerHTML = '';
+      if (outcome === 'accepted') textoInstalar.textContent = 'Pronto! Abra pelo ícone na tela de início.';
+    };
+  } else if (ehIOS) {
+    textoInstalar.innerHTML = 'No iPhone: abra este site no <b>Safari</b>, toque em <b>Compartilhar</b> '
+      + '(o quadrado com a seta para cima) e depois em <b>“Adicionar à Tela de Início”</b>. '
+      + 'Depois, abra sempre pelo ícone.';
+  } else {
+    textoInstalar.innerHTML = 'No menu do navegador, toque em <b>“Instalar app”</b> ou '
+      + '<b>“Adicionar à tela de início”</b> para usar como aplicativo, mesmo sem internet.';
+  }
+
+  const textoPush = push.querySelector('[data-texto-push]');
+  const acoesPush = push.querySelector('[data-acoes-push]');
+  const paraQue = ehAdmin()
+    ? 'Receba um aviso quando um motorista registrar algo, mesmo com o app fechado.'
+    : 'Receba um aviso quando o escritório abrir uma viagem para você ou pagar suas diárias.';
+
+  async function desenhaPush() {
+    const situacao = await situacaoPush();
+    acoesPush.innerHTML = '';
+    if (situacao === 'ativo') {
+      textoPush.textContent = 'Ativas: os avisos chegam neste aparelho mesmo com o app fechado.';
+      acoesPush.innerHTML = `
+        <button class="btn" type="button" data-testar>${icone('sino')} Enviar teste</button>
+        <button class="btn" type="button" data-desativar>Desativar</button>`;
+      acoesPush.querySelector('[data-testar]').onclick = async () => {
+        try {
+          await api('POST', 'push-teste');
+          recado('Teste enviado. Deve chegar em alguns segundos.');
+        } catch (erro) {
+          recado(erro.message);
+        }
+      };
+      acoesPush.querySelector('[data-desativar]').onclick = async () => {
+        await desativaPush().catch(() => {});
+        desenhaPush();
+      };
+    } else if (situacao === 'inativo') {
+      textoPush.textContent = paraQue;
+      buscaChaveVapid().catch(() => {});
+      acoesPush.innerHTML = `<button class="btn principal" type="button" data-ativar>${icone('sino')} Ativar notificações</button>`;
+      acoesPush.querySelector('[data-ativar]').onclick = async () => {
+        try {
+          await ativaPush();
+          recado('Notificações ativadas neste aparelho.');
+        } catch (erro) {
+          recado(erro.message);
+        }
+        desenhaPush();
+      };
+    } else {
+      textoPush.textContent = {
+        bloqueado: 'Bloqueadas. Libere as notificações deste site nas configurações do celular ou do navegador.',
+        'instalar-ios': 'No iPhone, as notificações só funcionam com o app instalado na tela de início '
+          + '(iOS 16.4 ou mais novo). Instale como explicado acima e abra pelo ícone.',
+        'sem-https': 'As notificações precisam do site em https:// (na hospedagem).',
+        'sem-suporte': 'Este navegador não recebe notificações. No Android use o Chrome; no iPhone, o Safari.',
+      }[situacao];
+    }
+  }
+  desenhaPush();
+}
+
+// Atalhos do ícone (manifest.php), notificação tocada e arquivo compartilhado chegam como ?acao=...
+function executaAcaoDaUrl() {
+  const p = new URLSearchParams(location.search);
+  const acao = p.get('acao');
+  if (!acao) return;
+  history.replaceState(null, '', location.pathname);
+  const recarrega = () => abreAba(estado.aba);
+  if (acao === 'gasto') abreFormLancamento('saida', null, recarrega);
+  else if (acao === 'viagem') abreFormViagem(null, recarrega);
+  else if (acao === 'nota') formNota(null, recarrega);
+  else if (acao === 'diaria') formDiaria(null, recarrega);
+  else if (acao === 'avisos') abreAvisos();
+  else if (acao === 'compartilhado' && Fila.ehLocal(p.get('arquivo'))) escolheDestinoDoArquivo(p.get('arquivo'), recarrega);
+}
+
+function escolheDestinoDoArquivo(ref, recarrega) {
+  const { elemento, fechar } = janela('Arquivo recebido', `
+    <p class="ajuda" style="margin-top:0">O que é este arquivo?</p>
+    <div class="acoes duas">
+      <button class="btn principal grande" type="button" data-nota>${icone('nota')} Nota fiscal</button>
+      <button class="btn grande" type="button" data-gasto>${icone('gasto')} Comprovante de gasto</button>
+    </div>`);
+  elemento.querySelector('[data-nota]').onclick = () => {
+    fechar();
+    formNota(null, recarrega, { arquivo: ref });
+  };
+  elemento.querySelector('[data-gasto]').onclick = () => {
+    fechar();
+    abreFormLancamento('saida', null, recarrega, { comprovante: ref });
+  };
 }
 
 const PAGAMENTOS = ['Dinheiro', 'Cartão da empresa', 'Pix', 'Cartão frete', 'Boleto', 'Do próprio bolso'];
@@ -876,8 +1369,8 @@ function opcoesViagem(selecionado, extra) {
   return [
     '<option value="">Fora de viagem</option>',
     ...comOExtra(estado.viagensAbertas, extra).map((v) => `
-      <option value="${v.id}" ${Number(selecionado) === Number(v.id) ? 'selected' : ''}>
-        ${esc(v.origem)} → ${esc(v.destino)}${v.inicio ? ` (saída ${dataDiaMes(v.inicio)})` : ''}
+      <option value="${esc(v.id)}" ${String(selecionado) === String(v.id) ? 'selected' : ''}>
+        ${Fila.ehLocal(v.id) ? '⏳ ' : ''}${esc(v.origem)} → ${esc(v.destino)}${v.inicio ? ` (saída ${dataDiaMes(v.inicio)})` : ''}
       </option>`),
   ].join('');
 }
@@ -1152,7 +1645,9 @@ function ligaCamposLancamento(form) {
     avisoFoto.classList.remove('oculto');
     try {
       form.elements.comprovante.value = await enviaArquivo(campoFoto.files[0]);
-      avisoFoto.textContent = 'Comprovante anexado.';
+      avisoFoto.textContent = Fila.ehLocal(form.elements.comprovante.value)
+        ? 'Sem internet: foto guardada no aparelho. Vai junto quando o sinal voltar.'
+        : 'Comprovante anexado.';
     } catch (erro) {
       avisoFoto.classList.add('oculto');
       mostraErro(form, erro.message || 'Não foi possível enviar a foto.');
@@ -1211,18 +1706,23 @@ function ligaNovaViagem(form) {
     salvar.disabled = true;
     salvar.textContent = 'Abrindo…';
     try {
-      const { id } = await api('POST', 'viagens', {}, {
+      const inicio = campo('inicio').value || hoje();
+      const r = await api('POST', 'viagens', {}, {
         origem,
         destino,
-        inicio: campo('inicio').value || hoje(),
+        inicio,
         km_inicial: campo('km').value,
         caminhao_id: form.elements.caminhao_id.value,
         usuario_id: form.elements.usuario_id?.value,
       });
-      estado.viagensAbertas = await api('GET', 'viagens', { status: 'aberta', limite: 100 });
-      form.elements.viagem_id.innerHTML = opcoesViagem(id);
+      estado.viagensAbertas = await carregaViagensAbertas().catch(() => (
+        r.offline ? [...estado.viagensAbertas, { id: r.id, origem, destino, inicio }] : estado.viagensAbertas
+      ));
+      form.elements.viagem_id.innerHTML = opcoesViagem(r.id);
       fecha();
-      recado('Viagem aberta e escolhida neste lançamento.');
+      recado(r.offline
+        ? 'Sem internet: viagem guardada no aparelho e já escolhida neste lançamento.'
+        : 'Viagem aberta e escolhida neste lançamento.');
     } catch (erro) {
       mostraErro(form, erro.message);
     } finally {
@@ -1246,7 +1746,8 @@ function validaLancamento(dados, tipo) {
   return dados;
 }
 
-function abreFormLancamento(tipoInicial, lancamento, aoConcluir) {
+// base: valores iniciais de um lançamento novo (ex.: foto recebida pelo "Compartilhar").
+function abreFormLancamento(tipoInicial, lancamento, aoConcluir, base = {}) {
   let tipoAtual = tipoInicial || 'saida';
   const ehNovo = !lancamento;
 
@@ -1261,7 +1762,7 @@ function abreFormLancamento(tipoInicial, lancamento, aoConcluir) {
             ${icone('receber')} Frete (Entrada)
           </button>
         </div>` : ''}
-      ${camposLancamento(tipoAtual, lancamento || {})}
+      ${camposLancamento(tipoAtual, lancamento || base)}
       <div class="acoes fim" style="margin-top:16px">
         <button class="btn" type="button" data-cancelar>Cancelar</button>
         <button class="btn principal" type="submit">${lancamento ? 'Salvar alterações' : 'Salvar lançamento'}</button>
@@ -1302,10 +1803,12 @@ function abreFormLancamento(tipoInicial, lancamento, aoConcluir) {
 
   aoEnviar(form, async (dados) => {
     validaLancamento(dados, tipoAtual);
-    if (lancamento) await api('PUT', 'lancamento', { id: lancamento.id }, dados);
-    else await api('POST', 'lancamentos', {}, dados);
+    const r = lancamento
+      ? await api('PUT', 'lancamento', { id: lancamento.id }, dados)
+      : await api('POST', 'lancamentos', {}, dados);
     fechar();
-    if (lancamento) recado('Lançamento atualizado.');
+    if (r?.offline) recado(GUARDADO_OFFLINE);
+    else if (lancamento) recado('Lançamento atualizado.');
     else if (ehAdmin()) recado('Lançamento registrado com sucesso!');
     else recado(`Gasto salvo. Se errou algo, dá para corrigir nos próximos ${MINUTOS_PARA_CORRIGIR} minutos.`);
     if (ehAdmin() && tipoAtual === 'entrada') await recarregaRecebiveisAbertos();
@@ -1334,9 +1837,11 @@ async function telaNovoGasto(alvo) {
   ligaCamposLancamento(form);
   aoEnviar(form, async (dados) => {
     validaLancamento(dados, 'saida');
-    await api('POST', 'lancamentos', {}, dados);
+    const r = await api('POST', 'lancamentos', {}, dados);
     localStorage.setItem('ultimo_caminhao', dados.caminhao_id || '');
-    recado(`Gasto salvo. Se errou algo, dá para corrigir nos próximos ${MINUTOS_PARA_CORRIGIR} minutos.`);
+    recado(r?.offline
+      ? GUARDADO_OFFLINE
+      : `Gasto salvo. Se errou algo, dá para corrigir nos próximos ${MINUTOS_PARA_CORRIGIR} minutos.`);
     const guardar = {
       data: dados.data,
       caminhao_id: dados.caminhao_id,
@@ -1354,7 +1859,12 @@ async function telaNovoGasto(alvo) {
 async function mostraResumoHoje() {
   const caixa = document.getElementById('resumo-hoje');
   if (!caixa) return;
-  const r = await api('GET', 'lancamentos', { de: hoje(), ate: hoje(), limite: 5 });
+  let r;
+  try {
+    r = await api('GET', 'lancamentos', { de: hoje(), ate: hoje(), limite: 5 });
+  } catch {
+    return;
+  }
   if (!r.qtd) { caixa.innerHTML = ''; return; }
   caixa.innerHTML = `
     <div class="cartao">
@@ -1969,10 +2479,13 @@ function abreFormViagem(viagem, aoConcluir) {
     if (!dados.origem?.trim() || !dados.destino?.trim()) {
       throw new Error('Informe de onde está saindo e para onde vai.');
     }
-    if (viagem) await api('PUT', 'viagem', { id: viagem.id }, dados);
-    else await api('POST', 'viagens', {}, dados);
+    const r = viagem
+      ? await api('PUT', 'viagem', { id: viagem.id }, dados)
+      : await api('POST', 'viagens', {}, dados);
     fechar();
-    recado(viagem ? 'Viagem atualizada.' : 'Viagem aberta.');
+    if (r?.offline) recado(GUARDADO_OFFLINE);
+    else recado(viagem ? 'Viagem atualizada.' : 'Viagem aberta.');
+    estado.viagensAbertas = await carregaViagensAbertas().catch(() => estado.viagensAbertas);
     await aoConcluir?.();
   });
 }
@@ -2056,6 +2569,7 @@ async function abreViagem(v, aoConcluir) {
       const r2 = await api('POST', 'diarias', {}, {
         usuario_id: v.usuario_id, de: v.inicio, ate, viagem_id: v.id,
       });
+      if (r2.offline) { recado(GUARDADO_OFFLINE); return; }
       recado(r2.criadas
         ? `${r2.criadas} ${r2.criadas === 1 ? 'diária lançada' : 'diárias lançadas'}${r2.ja_existiam ? ` (${r2.ja_existiam} já existiam)` : ''}.`
         : 'Todos esses dias já tinham diária.');
@@ -2083,9 +2597,9 @@ async function abreViagem(v, aoConcluir) {
     const form = j.elemento.querySelector('form');
     form.querySelector('[data-cancelar]').onclick = j.fechar;
     aoEnviar(form, async (dados) => {
-      await api('POST', 'viagem-encerrar', { id: v.id }, dados);
+      const r = await api('POST', 'viagem-encerrar', { id: v.id }, dados);
       j.fechar();
-      recado('Viagem encerrada.');
+      recado(r?.offline ? GUARDADO_OFFLINE : 'Viagem encerrada.');
       await aoConcluir?.();
     });
   });
@@ -2883,18 +3397,7 @@ async function telaAjustes(alvo) {
         </div>
       </form>
 
-      <div class="cartao">
-        <div style="display:flex;align-items:center;gap:12px">
-          <div class="icone-kpi azul icone-instalar">${icone('celular')}</div>
-          <div>
-            <h2 style="margin:0 0 2px">Instalar Aplicativo no Celular</h2>
-            <p class="ajuda" style="margin:0">
-              No navegador do seu smartphone, acesse o menu e toque em
-              <b>“Adicionar à tela de início”</b> para usá-lo como um aplicativo completo.
-            </p>
-          </div>
-        </div>
-      </div>
+      ${cartoesDoAparelho()}
 
       <div style="display:flex;justify-content:flex-end">
         <button class="btn perigo grande" type="button" id="b-sair">
@@ -2912,12 +3415,8 @@ async function telaAjustes(alvo) {
     });
   }
 
-  alvo.querySelector('#b-sair').onclick = async () => {
-    try { await api('POST', 'logout'); } catch {}
-    estado.usuario = null;
-    estado.aba = null;
-    telaLogin('Você saiu da conta.');
-  };
+  alvo.querySelector('#b-sair').onclick = () => saiDaConta();
+  ligaCartoesDoAparelho(alvo);
 
   if (!admin) return;
 
@@ -3980,8 +4479,9 @@ function abreNota(n, aoConcluir) {
   });
 }
 
-function formNota(n, aoConcluir) {
-  const v = n || { data: hoje(), caminhao_id: estado.usuario.caminhao_padrao_id };
+// base: valores iniciais de uma nota nova (ex.: arquivo recebido pelo "Compartilhar").
+function formNota(n, aoConcluir, base = {}) {
+  const v = n || { data: hoje(), caminhao_id: estado.usuario.caminhao_padrao_id, ...base };
   const { elemento, fechar } = janela(n ? 'Editar nota fiscal' : 'Enviar nota fiscal', `
     <form class="form-pilha" novalidate>
       ${campoArquivo('nf-arquivo', 'Foto ou PDF da nota',
@@ -4039,10 +4539,10 @@ function formNota(n, aoConcluir) {
   ligaArquivo(form, 'nf-arquivo', 'arquivo', n ? 'Manter o arquivo atual' : 'Nenhum arquivo escolhido');
   aoEnviar(form, async (dados) => {
     if (!dados.arquivo) throw new Error('Anexe a foto ou o PDF da nota fiscal.');
-    if (n) await api('PUT', 'nota', { id: n.id }, dados);
-    else await api('POST', 'notas', {}, dados);
+    const r = n ? await api('PUT', 'nota', { id: n.id }, dados) : await api('POST', 'notas', {}, dados);
     fechar();
-    if (n) recado('Nota fiscal atualizada.');
+    if (r?.offline) recado(GUARDADO_OFFLINE);
+    else if (n) recado('Nota fiscal atualizada.');
     else if (ehAdmin()) recado('Nota fiscal guardada.');
     else recado(`Nota enviada ao escritório. Se errou algo, dá para corrigir nos próximos ${MINUTOS_PARA_CORRIGIR} minutos.`);
     await aoConcluir?.();
@@ -4336,6 +4836,12 @@ function formDiaria(d, aoConcluir) {
   aoEnviar(form, async (dados) => {
     if (novo) {
       const r = await api('POST', 'diarias', {}, dados);
+      if (r.offline) {
+        fechar();
+        recado(GUARDADO_OFFLINE);
+        await aoConcluir?.();
+        return;
+      }
       if (!r.criadas) throw new Error(r.ja_existiam === 1 ? 'Esse dia já está registrado.' : 'Esses dias já estão registrados.');
       fechar();
       const texto = `${r.criadas} ${r.criadas === 1 ? 'dia registrado' : 'dias registrados'}`
@@ -4538,13 +5044,27 @@ async function telaReceita(alvo) {
   await atualiza();
 }
 
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker
+    .register(`sw.js?v=${encodeURIComponent(window.VERSAO_APP || '')}`, { updateViaCache: 'none' })
+    .catch(() => {});
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (!estado.usuario) return;
+    if (e.data?.tipo === 'fila') aoSincronizar(e.data);
+    if (e.data?.tipo === 'push') verificaAvisos();
+    if (e.data?.tipo === 'abrir-avisos') abreAvisos();
+  });
+}
 
 (async function inicia() {
   try {
     estado.usuario = await api('GET', 'eu');
     await iniciaApp();
   } catch (erro) {
+    if (erro.offline) {
+      telaLogin('Sem internet. Para entrar pela primeira vez neste aparelho, conecte-se à internet.');
+      return;
+    }
     if (/PHP|inesperada|conectar|MySQL/i.test(erro.message)) {
       document.body.classList.add('tela-entrada');
       app.innerHTML = `<div class="tela-login"><div class="cartao">

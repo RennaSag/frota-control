@@ -136,7 +136,7 @@ function atualiza(string $tabela, int $id, array $dados): int
 
 // Sobe sempre que a estrutura muda; bancos antigos ganham as tabelas e colunas novas
 // na primeira visita depois da atualização, sem perder nada.
-const VERSAO_ESQUEMA = 2;
+const VERSAO_ESQUEMA = 3;
 
 function criaEstrutura(PDO $pdo): void
 {
@@ -361,6 +361,28 @@ function estruturaSql(string $banco): array
         n     INT          NOT NULL,
         desde $dataHora    NOT NULL";
 
+    // Aparelhos que recebem notificações push de cada usuário.
+    $tabelas['inscricoes_push'] = "
+        id            $id,
+        usuario_id    $ref         NOT NULL,
+        endpoint_hash VARCHAR(64)  NOT NULL,
+        endpoint      TEXT         NOT NULL,
+        p256dh        VARCHAR(120) NOT NULL,
+        auth          VARCHAR(60)  NOT NULL,
+        criado_em     $dataHora    NOT NULL,
+        UNIQUE (endpoint_hash)";
+
+    // Envios da fila do aparelho já gravados, para não gravar duas vezes (src/fila.php).
+    $tabelas['envios_fila'] = "
+        id         VARCHAR(40) NOT NULL PRIMARY KEY,
+        usuario_id $ref        NOT NULL,
+        resposta   TEXT            NULL,
+        criado_em  $dataHora   NOT NULL";
+
+    $tabelas['configuracoes'] = '
+        chave VARCHAR(40) NOT NULL PRIMARY KEY,
+        valor TEXT        NOT NULL';
+
     if ($banco === 'pgsql') {
         $tabelas['sessoes'] = '
             id     VARCHAR(128) NOT NULL PRIMARY KEY,
@@ -385,6 +407,7 @@ function estruturaSql(string $banco): array
         'idx_lanc_recebivel' => 'lancamentos (recebivel_id)',
         'idx_nota_usuario' => 'notas_fiscais (usuario_id)',
         'idx_diaria_data' => 'diarias (data)',
+        'idx_push_usuario' => 'inscricoes_push (usuario_id)',
     ] as $nome => $alvo) {
         $comandos['indices'][] = "CREATE INDEX $nome ON $alvo";
     }

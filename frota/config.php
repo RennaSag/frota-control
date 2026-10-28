@@ -26,4 +26,8 @@ define('NOME_SISTEMA', 'Controle da Frota');
 
 define('DIAS_LOGADO', 30);
 
+// Contato que vai junto das notificações push (exigido pelo Google e pela Apple).
+// Pode ser "mailto:seu@email.com" ou o endereço https do site.
+define('PUSH_CONTATO', conf('PUSH_CONTATO', 'mailto:contato@controle-frota.app'));
+
 define('MOSTRAR_ERROS', false);

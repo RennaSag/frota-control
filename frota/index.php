@@ -1,7 +1,8 @@
 <?php
 require __DIR__ . '/config.php';
 $nome = htmlspecialchars(NOME_SISTEMA, ENT_QUOTES, 'UTF-8');
-$v = '3.1.0';
+// Subir a versão renova o cache do app nos aparelhos (o sw.js usa este número).
+$v = '3.2.0';
 ?>
 <!doctype html>
 <html lang="pt-BR">
@@ -13,7 +14,8 @@ $v = '3.1.0';
   <meta name="theme-color" content="#4338ca">
   <link rel="manifest" href="manifest.php">
   <link rel="icon" href="assets/logo-64.png?v=<?= $v ?>" type="image/png">
-  <link rel="apple-touch-icon" href="assets/logo-512.png">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="<?= $nome ?>">
@@ -24,7 +26,8 @@ $v = '3.1.0';
 </head>
 <body>
   <div id="app"><p class="carregando">Carregando…</p></div>
-  <script>window.NOME_SISTEMA = <?= json_encode(NOME_SISTEMA) ?>;</script>
+  <script>window.NOME_SISTEMA = <?= json_encode(NOME_SISTEMA) ?>; window.VERSAO_APP = <?= json_encode($v) ?>;</script>
+  <script src="assets/fila.js?v=<?= $v ?>"></script>
   <script src="assets/app.js?v=<?= $v ?>"></script>
 </body>
 </html>

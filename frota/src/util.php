@@ -13,7 +13,11 @@ function responde($dados, int $status = 200): void
     http_response_code($status);
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
-    echo json_encode($dados, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    $json = (string) json_encode($dados, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    // Com o tamanho declarado, o aparelho recebe a resposta inteira mesmo que o PHP ainda
+    // continue trabalhando depois (envio das notificações push, em src/push.php).
+    header('Content-Length: ' . strlen($json));
+    echo $json;
     exit;
 }
 

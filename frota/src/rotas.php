@@ -108,6 +108,14 @@ function despacha(string $r, string $metodo)
             return rotaAvisos();
         case 'POST avisos-lidos':
             return rotaAvisosLidos();
+        case 'GET push-chave':
+            return rotaPushChave();
+        case 'POST push-inscrever':
+            return rotaPushInscrever();
+        case 'POST push-cancelar':
+            return rotaPushCancelar();
+        case 'POST push-teste':
+            return rotaPushTeste();
         case 'GET pdf':
             return rotaPdf();
         case 'GET pdf-panorama':
@@ -317,6 +325,8 @@ function rotaExcluiUsuario(int $id): array
     }
     consulta('DELETE FROM avisos WHERE usuario_id = ? OR para_usuario_id = ?', [$id, $id]);
     consulta('DELETE FROM avisos_vistos WHERE usuario_id = ?', [$id]);
+    consulta('DELETE FROM inscricoes_push WHERE usuario_id = ?', [$id]);
+    consulta('DELETE FROM envios_fila WHERE usuario_id = ?', [$id]);
     consulta('DELETE FROM usuarios WHERE id = ?', [$id]);
     return ['ok' => true];
 }
@@ -873,7 +883,26 @@ function registraAviso(array $eu, string $acao, string $tipo, ?int $lancamentoId
         'para_usuario_id' => $para,
         'criado_em' => agora(),
     ]);
+    $destinos = $para !== null ? [$para] : array_column(
+        todas("SELECT id FROM usuarios WHERE papel = 'admin' AND ativo = 1 AND id <> ?", [$eu['id']]),
+        'id'
+    );
+    agendaPush($destinos, $eu['nome'] . ' ' . (ACOES_AVISO[$acao][$tipo] ?? $acao) . ': ' . $resumo);
 }
+
+// Mesmo texto da tela (ACOES_AVISO em assets/app.js), usado nas notificações push.
+const ACOES_AVISO = [
+    'criou' => ['saida' => 'registrou um gasto', 'entrada' => 'registrou uma entrada'],
+    'editou' => ['saida' => 'editou um gasto', 'entrada' => 'editou uma entrada', 'nota' => 'editou uma nota fiscal'],
+    'excluiu' => [
+        'saida' => 'excluiu um gasto', 'entrada' => 'excluiu uma entrada',
+        'nota' => 'excluiu uma nota fiscal', 'diaria' => 'excluiu uma diária',
+    ],
+    'abriu' => ['viagem' => 'abriu uma viagem'],
+    'enviou' => ['nota' => 'enviou uma nota fiscal'],
+    'registrou' => ['diaria' => 'registrou dias trabalhados'],
+    'pagou' => ['diaria' => 'pagou suas diárias'],
+];
 
 function filtroAvisos(array $eu): array
 {
@@ -922,10 +951,17 @@ function rotaAvisos(): array
     }
     unset($a);
     return [
-        'nao_lidos' => (int) umValor("SELECT COUNT(*) FROM avisos a WHERE $cond AND a.id > ?", [...$args, $visto]),
+        'nao_lidos' => avisosNaoLidos($eu),
         'ultimo_id' => (int) umValor("SELECT COALESCE(MAX(a.id), 0) FROM avisos a WHERE $cond", $args),
         'itens' => $itens,
     ];
+}
+
+function avisosNaoLidos(array $eu): int
+{
+    $visto = ultimoAvisoVisto($eu['id']);
+    [$cond, $args] = filtroAvisos($eu);
+    return (int) umValor("SELECT COUNT(*) FROM avisos a WHERE $cond AND a.id > ?", [...$args, $visto]);
 }
 
 function rotaAvisosLidos(): array

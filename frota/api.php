@@ -12,16 +12,35 @@ require __DIR__ . '/src/banco.php';
 require __DIR__ . '/src/sessao.php';
 require __DIR__ . '/src/rotas.php';
 require __DIR__ . '/src/pdf.php';
+require __DIR__ . '/src/push.php';
+require __DIR__ . '/src/fila.php';
 
 header('X-Content-Type-Options: nosniff');
 header('Referrer-Policy: same-origin');
 
 try {
     exigePedidoDoApp();
-    $resposta = despacha(
-        (string) ($_GET['r'] ?? ''),
-        strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET')
-    );
+    $envio = idDoEnvio();
+    if ($envio !== null) {
+        $repetido = reservaEnvio($envio);
+        if ($repetido !== null) {
+            responde($repetido);
+        }
+    }
+    try {
+        $resposta = despacha(
+            (string) ($_GET['r'] ?? ''),
+            strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET')
+        );
+    } catch (Throwable $e) {
+        if ($envio !== null) {
+            liberaEnvio($envio);
+        }
+        throw $e;
+    }
+    if ($envio !== null) {
+        guardaEnvio($envio, $resposta);
+    }
     responde($resposta);
 } catch (ErroDeUso $e) {
     $status = $e->getCode();
