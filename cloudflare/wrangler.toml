@@ -1,0 +1,25 @@
+name = "controle-frota"
+main = "src/index.js"
+compatibility_date = "2025-10-01"
+# AsyncLocalStorage (contexto de cada pedido) e o driver do Neon.
+compatibility_flags = ["nodejs_compat"]
+
+# A tela, os ícones e o service worker saem direto da pasta do app.
+# O que não é público (PHP, banco local, fotos antigas) fica de fora: veja frota/.assetsignore.
+[assets]
+directory = "../frota"
+binding = "ASSETS"
+
+# Roda o Worker perto do banco (Neon) em vez de perto do usuário: cada pedido faz várias
+# consultas seguidas, e assim cada uma leva milissegundos em vez de uma viagem ao exterior.
+[placement]
+mode = "smart"
+
+[observability]
+enabled = true
+
+# Segredos (não ficam neste arquivo). Cadastre com:
+#   npx wrangler secret put DATABASE_URL
+#   npx wrangler secret put FROTA_ADMIN_SENHA
+[vars]
+FROTA_PUSH_CONTATO = "mailto:contato@controle-frota.app"

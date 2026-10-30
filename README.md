@@ -169,6 +169,28 @@ Service worker e push exigem contexto seguro: HTTPS ou `localhost`.
 
 `render.yaml` descreve o serviço Docker. Defina `DATABASE_URL` (PostgreSQL) e `FROTA_ADMIN_SENHA`.
 
+### Cloudflare Workers (com Neon)
+
+`cloudflare/` é a mesma API reescrita em JavaScript para Workers. Ela usa o mesmo banco
+PostgreSQL, os mesmos endereços (`api.php`, `manifest.php`) e o mesmo formato de sessão, senha
+e chaves VAPID. Por isso o app, os dados e os logins continuam como estavam. A tela e o service worker saem direto de
+`frota/` como arquivos estáticos (o que não é público fica de fora em `frota/.assetsignore`).
+O Worker não dorme; o Smart Placement o roda perto do Neon.
+
+```bash
+cd cloudflare
+npm install
+npx wrangler login
+npx wrangler secret put DATABASE_URL       # a mesma URL do Neon usada no Render
+npx wrangler secret put FROTA_ADMIN_SENHA
+npx wrangler deploy
+```
+
+Para rodar local: crie `cloudflare/.dev.vars` com `DATABASE_URL=...` e use `npx wrangler dev`.
+
+Diferenças em relação ao PHP: o servidor não reduz nem converte fotos (não há `gd`); o app já
+regrava a foto antes do envio, o que também apaga EXIF e GPS. Só PostgreSQL é suportado.
+
 ## Configuração
 
 | Variável | Padrão | Descrição |
@@ -180,8 +202,9 @@ Service worker e push exigem contexto seguro: HTTPS ou `localhost`.
 | `FROTA_ADMIN_SENHA` | `admin123` | Senha inicial do `admin` |
 | `FROTA_PUSH_CONTATO` | `mailto:contato@controle-frota.app` | Campo `sub` do VAPID |
 
-A versão do app fica em `$v` no `frota/index.php`. Ela versiona os assets e o service worker
-(`sw.js?v=`); subir o número força os aparelhos a renovar o cache.
+A versão do app fica em `$v` no `frota/index.php` e em `VERSAO` no `cloudflare/src/index.js`
+(mantenha as duas iguais). Ela versiona os assets e o service worker (`sw.js?v=`); subir o
+número força os aparelhos a renovar o cache.
 
 ## Estrutura
 
@@ -204,6 +227,13 @@ frota/
     ├── app.js       SPA
     ├── fila.js      fila offline (compartilhada com o sw.js)
     └── estilo.css
+
+cloudflare/          a mesma API em Cloudflare Workers (um arquivo .js para cada .php de src/)
+├── wrangler.toml
+└── src/
+    ├── index.js     entrada: api.php, manifest.php, página e estáticos
+    ├── contexto.js  contexto do pedido e acesso ao Neon
+    └── ...          banco, sessao, rotas, avisos, push, fila, pdf, util
 ```
 
 O manual de uso do sistema está em [`frota/README.md`](frota/README.md).

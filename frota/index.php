@@ -2,7 +2,7 @@
 require __DIR__ . '/config.php';
 $nome = htmlspecialchars(NOME_SISTEMA, ENT_QUOTES, 'UTF-8');
 // Subir a versão renova o cache do app nos aparelhos (o sw.js usa este número).
-$v = '3.2.0';
+$v = '3.3.0';
 ?>
 <!doctype html>
 <html lang="pt-BR">

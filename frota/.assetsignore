@@ -1,0 +1,9 @@
+# Arquivos que o Cloudflare NÃO publica (cloudflare/wrangler.toml usa esta pasta como estáticos).
+# Código PHP, banco local e fotos antigas nunca podem ser servidos direto.
+*.php
+src
+dados
+uploads
+README.md
+.htaccess
+.assetsignore

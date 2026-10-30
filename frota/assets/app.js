@@ -205,7 +205,7 @@ async function api(metodo, rota, params = {}, corpo = null) {
   try {
     dados = texto ? JSON.parse(texto) : null;
   } catch {
-    throw new Error('O servidor respondeu de forma inesperada. Veja se o PHP está rodando.');
+    throw new Error('O servidor respondeu de forma inesperada. Tente de novo em instantes.');
   }
   if (offline === 'vazio') throw erroSemInternet(dados?.erro);
   if (!resposta.ok) throw new Error(dados?.erro || 'Não foi possível concluir.');
@@ -1568,7 +1568,8 @@ function camposLancamento(tipo, l = {}) {
 }
 
 // Reduz a foto antes do envio (lado maior até 1600px) e grava em WebP. O Safari não gera WebP
-// no canvas (devolve PNG), então nesse caso vai em JPEG; o servidor converte para WebP de todo jeito.
+// no canvas (devolve PNG), então nesse caso vai em JPEG. Regravar também descarta os metadados
+// (EXIF, GPS) — o servidor guarda a foto como chega —, por isso vai a regravada mesmo se ficar maior.
 async function reduzFoto(arquivo) {
   if (!/^image\/(jpeg|png|webp)$/.test(arquivo.type)) return arquivo;
   try {
@@ -1581,7 +1582,7 @@ async function reduzFoto(arquivo) {
     const gera = (tipo) => new Promise((pronto) => tela.toBlob(pronto, tipo, 0.8));
     let blob = await gera('image/webp');
     if (blob?.type !== 'image/webp') blob = await gera('image/jpeg');
-    if (!blob || blob.size >= arquivo.size) return arquivo;
+    if (!blob) return arquivo;
     const extensao = blob.type === 'image/webp' ? 'webp' : 'jpg';
     return new File([blob], `comprovante.${extensao}`, { type: blob.type });
   } catch {

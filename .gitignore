@@ -3,3 +3,7 @@ frota/uploads/*
 !frota/uploads/.htaccess
 !frota/dados/.htaccess
 frota/config.local.php
+
+cloudflare/node_modules/
+cloudflare/.wrangler/
+cloudflare/.dev.vars
