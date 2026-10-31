@@ -24,9 +24,9 @@ async function telaAdm() {
       <main class="adm-conteudo pilha">
         <div class="titulo-secao">
           <h1>Senhas e acessos</h1>
-          <p>Redefina a senha de quem esqueceu, destrave logins após muitas tentativas e bloqueie ou reative acessos.</p>
+          <p>Redefinição de senhas, destrave de logins.</p>
         </div>
-        <div class="aviso info">${icone('escudo')} As senhas ficam guardadas de forma criptografada, então não dá para ver a senha atual de ninguém, só definir uma nova. Ao trocar a senha, a pessoa é desconectada dos aparelhos.</div>
+        <div class="aviso info">${icone('escudo')} As senhas guardadas de forma criptografada. Ao trocar a senha, o usuário é desconectado dos aparelhos.</div>
         <div class="campo adm-busca">
           <label for="adm-busca">Buscar</label>
           <input id="adm-busca" type="search" placeholder="Nome ou usuário" autocomplete="off">
