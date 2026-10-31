@@ -2,7 +2,7 @@ async function telaDiarias(alvo) {
   const admin = ehAdmin();
   const filtro = { mes: hoje().slice(0,7), usuario_id:'', escopo:'pendentes', busca:'' };
   let dados, selecionadas = new Set(), versaoConsulta=0;
-  alvo.innerHTML = `<div class="pilha"><div class="cabecalho-secao"><div><h1>${admin ? 'Diárias dos motoristas' : 'Minhas diárias'}</h1><p class="ajuda">Dias trabalhados, pendências e pagamentos em um só lugar.</p></div><button class="btn principal" type="button" data-registrar>${icone('adicionar')} Registrar dias</button></div>
+  alvo.innerHTML = `<div class="pilha"><div class="titulo-secao"><div class="cabecalho-secao"><div><h1>${admin ? 'Diárias dos motoristas' : 'Minhas diárias'}</h1><p>Dias trabalhados, pendências e pagamentos em um só lugar.</p></div><button class="btn principal" type="button" data-registrar>${icone('adicionar')} Registrar dias</button></div></div>
     <div class="cartao"><div class="campo"><label for="diaria-busca">${admin?'Pesquisar motorista':'Pesquisar diárias'}</label><div class="busca-com-filtro"><input type="search" id="diaria-busca" list="diarias-keywords" placeholder="${admin?'Nome, telefone ou usuário do motorista':'Data, viagem ou observação'}"><button class="btn" type="button" data-filtros-diarias aria-label="Filtros de diárias">${icone('filtro')}<span>Filtros</span></button></div></div><small data-filtros-rotulo></small>${sugestoesBusca('diarias-keywords',estado.usuarios.filter((u)=>u.papel==='motorista').map((u)=>u.nome))}</div>
     <div class="diarias-resumo" data-resumo></div><div data-motoristas></div><div data-dias></div></div>`;
   const atualiza = async () => {

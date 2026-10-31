@@ -2034,10 +2034,10 @@ async function telaLancamentos(alvo) {
   alvo.innerHTML = `
     <div class="pilha">
       <div class="titulo-secao">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div class="cabecalho-secao">
           <div>
             <h1>${admin ? 'Lançamentos' : 'Meus gastos'}</h1>
-            <p id="rotulo-mes" style="font-weight:600;color:var(--tinta-2)">${mesLongo(estado.mes)}</p>
+            <p id="rotulo-mes">${mesLongo(estado.mes)}</p>
           </div>
           <div class="acoes" style="margin:0">
             ${admin ? `
@@ -2611,7 +2611,7 @@ async function telaPanorama(alvo) {
   alvo.innerHTML = `
     <div class="pilha">
       <div class="titulo-secao">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
+        <div class="cabecalho-secao">
           <div>
             <h1>Panorama Financeiro & Operacional</h1>
             <p id="p-periodo"></p>
@@ -3207,8 +3207,8 @@ async function telaAjustes(alvo) {
             const ehEntrada = c.tipo === 'entrada';
             return `
             ${indice===0||filtradas[indice-1].tipo!==c.tipo?`<h3 class="categoria-grupo-titulo">${c.tipo==='entrada'?'Entradas':'Gastos e despesas'} <small>${filtradas.filter(item=>item.tipo===c.tipo).length} categorias</small></h3>`:''}
-            <div data-categoria-ordem="${esc(c.id)}" class="item-categoria-cartao ${Number(c.ativo) ? '' : 'inativa'}">
-              <button class="alca-categoria" draggable="true" type="button" data-arrastar="${esc(c.id)}" aria-label="Ordenar ${esc(c.nome)}. Use as setas para mover.">⠿</button><div class="cabecalho-categoria-cartao">
+            <div data-categoria-ordem="${esc(c.id)}" data-tipo="${esc(c.tipo)}" data-ativo="${Number(c.ativo)?1:0}" class="item-categoria-cartao ${Number(c.ativo) ? '' : 'inativa'}">
+              <button class="alca-categoria" type="button" data-arrastar="${esc(c.id)}" aria-label="Ordenar ${esc(c.nome)}. Use as setas para mover.">⠿</button><div class="cabecalho-categoria-cartao">
                 <div class="icone-categoria-caixa ${c.tipo}">
                   ${icone(ICONES_SVG[c.icone]?c.icone:ehEntrada?'receber':Number(c.pede_litros)?'combustivel':'tag')}
                 </div>
@@ -3240,29 +3240,78 @@ async function telaAjustes(alvo) {
           }).join('')}
         </div>`;
 
-      let movendo=null,ocupado=false;
-      const mover=async(origem,destino)=>{
-        if(ocupado||String(origem)===String(destino))return;
-        if(categorias.some(c=>Fila.ehLocal(c.id))){recado('Sincronize as novas categorias antes de organizar a ordem.');return;}
-        const item=categorias.find(c=>String(c.id)===String(origem)),alvo=categorias.find(c=>String(c.id)===String(destino));
-        if(!item||!alvo||item.tipo!==alvo.tipo||Number(item.ativo)!==Number(alvo.ativo)){recado('Mova dentro do mesmo tipo e situação da categoria.');return;}
-        const lista=categorias.filter(c=>c.tipo===item.tipo),de=lista.indexOf(item),ate=lista.indexOf(alvo);lista.splice(de,1);lista.splice(ate,0,item);
-        ocupado=true;containerCats.setAttribute('aria-busy','true');
-        try{await api('PUT','categorias-ordem',{}, {tipo:item.tipo,ids:lista.map(c=>c.id)});await atualiza();containerCats.querySelector('[data-arrastar="'+item.id+'"]')?.focus({preventScroll:true});recado('Ordem das categorias salva.');}catch(e){recado(e.message);}finally{ocupado=false;containerCats.removeAttribute('aria-busy');}
+      // Ordenação: o cartão segue o dedo/mouse, os vizinhos deslizam (FLIP) e a ordem
+      // é salva em segundo plano, sem recarregar a tela.
+      const grade=containerCats.querySelector('.categorias-ordenaveis');
+      const cartoes=()=>[...grade.querySelectorAll('[data-categoria-ordem]')];
+      const mesmoGrupo=(a,b)=>a&&b&&a.matches?.('[data-categoria-ordem]')&&a.dataset.tipo===b.dataset.tipo&&a.dataset.ativo===b.dataset.ativo;
+      const temLocal=()=>{if(categorias.some(c=>Fila.ehLocal(c.id))){recado('Sincronize as novas categorias antes de organizar a ordem.');return true;}return false;};
+      const flip=(mexe,ignorar)=>{
+        const antes=new Map(cartoes().filter(el=>el!==ignorar).map(el=>[el,el.getBoundingClientRect().top]));
+        mexe();
+        for(const [el,topo] of antes){const d=topo-el.getBoundingClientRect().top;if(Math.abs(d)<1)continue;el.animate([{transform:`translateY(${d}px)`},{transform:'translateY(0)'}],{duration:200,easing:'cubic-bezier(.2,.8,.2,1)'});}
       };
-      containerCats.querySelectorAll('[data-categoria-ordem]').forEach(card=>{
-        card.ondragover=e=>{e.preventDefault();card.classList.add('categoria-destino');};card.ondragleave=()=>card.classList.remove('categoria-destino');
-        card.ondrop=e=>{e.preventDefault();containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));mover(movendo,card.dataset.categoriaOrdem);};
-      });
-      containerCats.querySelectorAll('[data-arrastar]').forEach(alca=>{
-        alca.ondragstart=e=>{movendo=alca.dataset.arrastar;e.dataTransfer.setData('text/plain',movendo);e.dataTransfer.effectAllowed='move';};
-        alca.ondragend=()=>containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));
-        alca.onkeydown=e=>{if(!['ArrowUp','ArrowDown'].includes(e.key))return;e.preventDefault();const c=categorias.find(c=>String(c.id)===alca.dataset.arrastar),lista=categorias.filter(x=>x.tipo===c.tipo&&Number(x.ativo)===Number(c.ativo)),i=lista.indexOf(c),alvo=lista[i+(e.key==='ArrowUp'?-1:1)];if(alvo)mover(c.id,alvo.id);};
-        let destino=null;
-        alca.onpointerdown=e=>{if(e.pointerType==='mouse')return;e.preventDefault();movendo=alca.dataset.arrastar;destino=null;alca.setPointerCapture(e.pointerId);alca.classList.add('arrastando');};
-        alca.onpointermove=e=>{if(!alca.hasPointerCapture(e.pointerId))return;if(e.clientY>window.innerHeight-100)window.scrollBy(0,20);else if(e.clientY<120)window.scrollBy(0,-20);containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));const card=document.elementFromPoint(e.clientX,e.clientY)?.closest('[data-categoria-ordem]');if(card){destino=card.dataset.categoriaOrdem;card.classList.add('categoria-destino');}};
-        alca.onpointerup=e=>{if(!alca.hasPointerCapture(e.pointerId))return;alca.releasePointerCapture(e.pointerId);alca.classList.remove('arrastando');containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));if(destino)mover(movendo,destino);};
-        alca.onpointercancel=()=>{alca.classList.remove('arrastando');containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));};
+      const assinatura=(tipo)=>cartoes().filter(el=>el.dataset.tipo===tipo).map(el=>el.dataset.categoriaOrdem).join(',');
+      const salvaOrdem=(tipo)=>{
+        const ids=cartoes().filter(el=>el.dataset.tipo===tipo).map(el=>categorias.find(c=>String(c.id)===el.dataset.categoriaOrdem)).filter(Boolean);
+        ids.forEach((c,i)=>{c.ordem=i+1;});
+        categorias.sort((a,b)=>a.tipo.localeCompare(b.tipo)||Number(b.ativo)-Number(a.ativo)||Number(a.ordem)-Number(b.ordem)||a.nome.localeCompare(b.nome));
+        filaOrdemCategorias=filaOrdemCategorias
+          .then(()=>api('PUT','categorias-ordem',{}, {tipo,ids:ids.map(c=>c.id)}))
+          .then(()=>recado('Ordem das categorias salva.'))
+          .catch((e)=>{recado(e.message);return atualiza();});
+      };
+      cartoes().forEach((card)=>{
+        const alca=card.querySelector('[data-arrastar]');
+        alca.onkeydown=(e)=>{
+          if(!['ArrowUp','ArrowDown'].includes(e.key))return;
+          e.preventDefault();if(temLocal())return;
+          const sobe=e.key==='ArrowUp',vizinho=sobe?card.previousElementSibling:card.nextElementSibling;
+          if(!mesmoGrupo(vizinho,card))return;
+          flip(()=>sobe?vizinho.before(card):vizinho.after(card));
+          alca.focus({preventScroll:true});card.scrollIntoView({block:'nearest'});
+          salvaOrdem(card.dataset.tipo);
+        };
+        let arrasto=null;
+        const posiciona=()=>{
+          if(!arrasto)return;
+          const ref=card.offsetParent?card.offsetParent.getBoundingClientRect().top:0;
+          const topoVisual=arrasto.y-ref-arrasto.offY,centro=topoVisual+card.offsetHeight/2;
+          const ant=card.previousElementSibling,prox=card.nextElementSibling;
+          if(mesmoGrupo(ant,card)&&centro<ant.offsetTop+ant.offsetHeight/2)flip(()=>ant.before(card),card);
+          else if(mesmoGrupo(prox,card)&&centro>prox.offsetTop+prox.offsetHeight/2)flip(()=>prox.after(card),card);
+          card.style.transform=`translateY(${topoVisual-card.offsetTop}px)`;
+        };
+        const rolagem=()=>{
+          if(!arrasto)return;
+          const borda=90,y=arrasto.y,h=window.innerHeight;
+          const passo=y>h-borda?Math.ceil((y-(h-borda))/6):y<borda?-Math.ceil((borda-y)/6):0;
+          if(passo){window.scrollBy(0,passo);posiciona();}
+          arrasto.quadro=requestAnimationFrame(rolagem);
+        };
+        const termina=()=>{
+          if(!arrasto)return;
+          cancelAnimationFrame(arrasto.quadro);
+          const mudou=arrasto.inicial!==assinatura(card.dataset.tipo);arrasto=null;
+          grade.classList.remove('ordenando');alca.classList.remove('arrastando');
+          card.classList.add('soltando');card.style.transform='translateY(0)';
+          const limpa=()=>{card.classList.remove('soltando','arrastando-card');card.style.transform='';};
+          card.addEventListener('transitionend',limpa,{once:true});setTimeout(limpa,260);
+          if(mudou)salvaOrdem(card.dataset.tipo);
+        };
+        alca.onpointerdown=(e)=>{
+          if(e.button>0||arrasto)return;
+          if(temLocal())return;
+          e.preventDefault();alca.setPointerCapture(e.pointerId);
+          const ref=card.offsetParent?card.offsetParent.getBoundingClientRect().top:0;
+          arrasto={y:e.clientY,offY:e.clientY-ref-card.offsetTop,inicial:assinatura(card.dataset.tipo)};
+          card.classList.remove('soltando');card.classList.add('arrastando-card');alca.classList.add('arrastando');grade.classList.add('ordenando');
+          arrasto.quadro=requestAnimationFrame(rolagem);
+        };
+        alca.onpointermove=(e)=>{if(!arrasto)return;arrasto.y=e.clientY;posiciona();};
+        alca.onpointerup=termina;
+        alca.onpointercancel=termina;
+        alca.onlostpointercapture=termina;
       });
       containerCats.querySelectorAll('[data-editar-categoria]').forEach((b) => {
         const c = categorias.find((x) => String(x.id) === String(b.dataset.editarCategoria));
@@ -3494,6 +3543,9 @@ const EXEMPLOS_CATEGORIA = {
   entrada: 'Ex.: Frete de Grãos, Frete de Madeira, Retorno de Carga, Aluguel de Carreta.',
 };
 
+// Saves de ordem das categorias em fila, para não chegarem fora de ordem ao servidor.
+let filaOrdemCategorias = Promise.resolve();
+
 function formCategoria(c, aoConcluir) {
   const novo = !c;
   const tipo = c?.tipo || 'saida';
@@ -3517,7 +3569,7 @@ function formCategoria(c, aoConcluir) {
         <p class="dica" data-exemplo>${EXEMPLOS_CATEGORIA[tipo]}</p>
         <input id="k-nome" name="nome" required maxlength="40" value="${esc(c?.nome || '')}" placeholder="Ex.: Manutenção Preventiva">
       </div>
-      <div class="campo"><label for="k-icone">Ícone</label><select id="k-icone" name="icone">${[['tag','Etiqueta'],['combustivel','Combustível'],['caminhao','Caminhão'],['rota','Viagem'],['receber','Recebimento'],['nota','Documento'],['usuario','Equipe'],['ajustes','Serviço'],...[c?.icone && !['tag','combustivel','caminhao','rota','receber','nota','usuario','ajustes'].includes(c.icone)?[c.icone,'Ícone atual']:null].filter(Boolean)].map(([id,nome])=>`<option value="${esc(id)}" ${c?.icone===id?'selected':''}>${nome}</option>`).join('')}</select></div>
+      <fieldset class="campo seletor-icones"><legend>Ícone <small data-icone-nome></small></legend><div class="grade-icones" role="radiogroup" aria-label="Ícone da categoria">${[['tag','Etiqueta'],['combustivel','Combustível'],['caminhao','Caminhão'],['rota','Viagem'],['receber','Recebimento'],['nota','Documento'],['usuario','Equipe'],['ajustes','Serviço'],...[c?.icone && ICONES_SVG[c.icone] && !['tag','combustivel','caminhao','rota','receber','nota','usuario','ajustes'].includes(c.icone)?[c.icone,'Ícone atual']:null].filter(Boolean)].map(([id,nome])=>`<label class="opcao-icone" title="${nome}"><input type="radio" name="icone" value="${esc(id)}" data-nome="${nome}" ${(ICONES_SVG[c?.icone]?c.icone:'tag')===id?'checked':''}><span class="caixa-icone">${icone(id)}</span><span class="nome-icone">${nome}</span></label>`).join('')}</div></fieldset>
       <fieldset class="categoria-regras"><legend>Campos ao lançar</legend><label><input type="checkbox" name="pede_descricao" value="1" ${Number(c?.pede_descricao)?'checked':''}> Solicitar uma descrição</label><label><input type="checkbox" name="pede_litros" value="1" ${Number(c?.pede_litros)?'checked':''} ${travada||tipo==='entrada'?'disabled':''}> Registrar litros e quilometragem (gastos)</label>${travada?'<small>O controle de abastecimento é preservado porque a categoria já possui lançamentos.</small>':''}</fieldset>
       <div class="campo ${tipo === 'saida' ? '' : 'oculto'}" data-so-gasto>
         <label for="k-visivel">Visível aos motoristas?</label><select id="k-visivel" name="visivel_motorista"><option value="1" ${!Number(c?.oculta_motorista) ? 'selected' : ''}>Sim</option><option value="0" ${Number(c?.oculta_motorista) ? 'selected' : ''}>Não</option></select><small>Quando não estiver visível, apenas o proprietário poderá usar esta categoria.</small>
@@ -3550,7 +3602,10 @@ function formCategoria(c, aoConcluir) {
     };
   }
 
-  form.querySelectorAll('[data-modelo]').forEach(b=>b.onclick=()=>{const nome=b.dataset.modelo;form.querySelector('[data-tipo="'+(nome==='Frete'?'entrada':'saida')+'"]').click();form.elements.nome.value=nome;form.elements.icone.value=nome==='Combustível'?'combustivel':nome==='Frete'?'receber':nome==='Manutenção'?'ajustes':'tag';form.elements.pede_litros.checked=nome==='Combustível';});
+  form.querySelectorAll('[data-modelo]').forEach(b=>b.onclick=()=>{const nome=b.dataset.modelo;form.querySelector('[data-tipo="'+(nome==='Frete'?'entrada':'saida')+'"]').click();form.elements.nome.value=nome;form.elements.icone.value=nome==='Combustível'?'combustivel':nome==='Frete'?'receber':nome==='Manutenção'?'ajustes':'tag';form.elements.pede_litros.checked=nome==='Combustível';mostraIcone();});
+  const mostraIcone=()=>{const marcado=form.querySelector('input[name="icone"]:checked');const alvoNome=form.querySelector('[data-icone-nome]');if(alvoNome)alvoNome.textContent=marcado?'· '+marcado.dataset.nome:'';};
+  form.querySelectorAll('input[name="icone"]').forEach((r)=>r.addEventListener('change',mostraIcone));
+  mostraIcone();
   form.querySelectorAll('[data-tipo]').forEach((b) => {
     b.onclick = () => {
       form.querySelectorAll('[data-tipo]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
@@ -3679,7 +3734,7 @@ async function telaReceber(alvo) {
   alvo.innerHTML = `
     <div class="pilha">
       <div class="titulo-secao">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
+        <div class="cabecalho-secao">
           <div>
             <h1>Fretes a receber</h1>
             <p>O que entrou no mês, o que os clientes ainda devem e quem pagou só uma parte.</p>
@@ -4068,7 +4123,7 @@ async function telaNotas(alvo) {
   alvo.innerHTML = `
     <div class="pilha">
       <div class="titulo-secao">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
+        <div class="cabecalho-secao">
           <div>
             <h1>Notas fiscais</h1>
             <p>${admin

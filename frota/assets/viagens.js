@@ -40,7 +40,7 @@ async function telaViagens(alvo) {
   const filtro = { busca: '', status: '', mes: hoje().slice(0, 7), pendentes: Boolean(estado.viagensSomentePendentes) };
   estado.viagensSomentePendentes = false;
   alvo.innerHTML = `<div class="pilha">
-    <div class="titulo-secao"><div class="cabecalho-secao"><div><span class="sobre-titulo">OPERAÇÃO E RECEBIMENTOS</span><h1>Viagens</h1><p>Da saída à quitação. Tudo em um só lugar.</p></div><button class="btn principal" id="b-nova" type="button">${icone('adicionar')} Nova viagem</button></div></div>
+    <div class="titulo-secao"><div class="cabecalho-secao"><div><h1>Viagens</h1><p>Da saída à quitação. Tudo em um só lugar.</p></div><button class="btn principal" id="b-nova" type="button">${icone('adicionar')} Nova viagem</button></div></div>
     ${ehAdmin() ? '<div id="viagens-resumo" class="resumo-viagens"></div>' : ''}
     <div class="cartao busca-viagens"><div class="campo"><label for="v-busca">Buscar viagem</label><div class="busca-com-filtro"><input id="v-busca" type="search" placeholder="Cliente, local ou placa"><button class="btn" type="button" id="v-filtros" aria-label="Filtros de viagens" title="Filtros de viagens">${icone('filtro')}<span>Filtros</span></button></div></div><small id="v-filtros-ativos"></small></div>
     <div id="lista-viagens"></div>
@@ -181,7 +181,7 @@ function formPagamentoViagem(v, atualizar, encerrar = false) {
 }
 
 async function telaClientes(alvo) {
-  alvo.innerHTML = `<div class="pilha"><div class="titulo-secao"><div class="cabecalho-secao"><div><span class="sobre-titulo">RELACIONAMENTOS</span><h1>Clientes</h1><p>Contatos, viagens e documentos sempre à mão.</p></div><button class="btn principal" id="novo-cliente" type="button">${icone('adicionar')} Novo cliente</button></div></div>
+  alvo.innerHTML = `<div class="pilha"><div class="titulo-secao"><div class="cabecalho-secao"><div><h1>Clientes</h1><p>Contatos, viagens e documentos sempre à mão.</p></div><button class="btn principal" id="novo-cliente" type="button">${icone('adicionar')} Novo cliente</button></div></div>
     <div class="cartao"><div class="campo"><label for="cliente-busca">Buscar cliente</label><input id="cliente-busca" type="search" placeholder="Nome, cidade, contato ou documento" list="clientes-keywords"></div><label class="opcao-integral"><input id="clientes-arquivados" type="checkbox"> Mostrar também clientes arquivados</label></div><div id="clientes-lista"></div></div>`;
   let clientes = [];
   const desenha = () => {

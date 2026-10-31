@@ -1,7 +1,7 @@
 // Ajudas da interface: contato de suporte, preenchimento de endereço e tour de primeiro acesso.
 
 // Contato mostrado na tela de login. O WhatsApp vai só com DDD e número.
-const SUPORTE = { email: 'emailteste@gmail.com', whatsapp: '64999999999' };
+const SUPORTE = { email: 'joaovdns.teds@gmail.com', whatsapp: '64993282845' };
 
 function contatoSuporte() {
   const fone = SUPORTE.whatsapp.replace(/\D/g, '');
