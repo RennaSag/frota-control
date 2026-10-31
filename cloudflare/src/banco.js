@@ -1,7 +1,14 @@
 import bcrypt from 'bcryptjs';
 import esquema from './esquema.json' with {type:'json'};
 import {conf,agora,ADMIN_NOME,ADMIN_USUARIO} from './util.js';
-export async function criaEstrutura(db){
+// Bancos já conferidos nesta instância do Worker: evita 2 consultas extras em todo pedido.
+const estruturaPronta=new Set();
+export async function criaEstrutura(db,chave=''){
+  if(chave && estruturaPronta.has(chave))return;
+  await criaEstruturaAgora(db);
+  if(chave)estruturaPronta.add(chave);
+}
+async function criaEstruturaAgora(db){
   let version=0;
   const exists=(await db.query("SELECT to_regclass('public.esquema') AS tabela")).rows[0]?.tabela;
   if(exists)version=Number((await db.query('SELECT MAX(versao) AS versao FROM esquema')).rows[0]?.versao||0);

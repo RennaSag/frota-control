@@ -26,7 +26,7 @@ async function api(req,env,execution){
   return rodaNoContexto(context,async()=>{
     let response,transaction=false;
     try{
-      exigePedidoDoApp();context.db=await abreBanco(env);await criaEstrutura(context.db);
+      exigePedidoDoApp();context.db=await abreBanco(env);await criaEstrutura(context.db,env.FROTA_AMBIENTE==='teste'?'':env.DATABASE_URL);
       if(!['GET','HEAD'].includes(req.method)){await context.db.query('BEGIN');transaction=true;}
       const id=idDoEnvio(), repeated=id?await reservaEnvio(id):null;
       if(repeated)response=json(repeated.resposta);

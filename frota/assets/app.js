@@ -703,14 +703,16 @@ async function abreAba(id) {
 }
 
 async function recarregaBasico() {
-  const [categorias, caminhoes, usuarios, viagens] = await Promise.all([
+  // Tudo em paralelo: cada pedido em série somava uma ida e volta ao servidor na abertura do app.
+  const [categorias, caminhoes, usuarios, viagens, clientes] = await Promise.all([
     api('GET', 'categorias'),
     api('GET', 'caminhoes'),
     api('GET', 'usuarios'),
     carregaViagensAbertas(),
+    api('GET', 'clientes'),
     ehAdmin() ? recarregaRecebiveisAbertos() : null,
   ]);
-  estado.clientes = await api('GET', 'clientes');
+  estado.clientes = clientes;
   estado.categorias = categorias;
   estado.caminhoes = caminhoes;
   estado.usuarios = usuarios;
@@ -2197,9 +2199,9 @@ async function telaLancamentos(alvo) {
 
     caixaLista.innerHTML = `
       <div class="cartao" style="padding:12px 14px">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 6px 10px;border-bottom:1px solid var(--borda);color:var(--tinta-3);font-size:0.75rem;font-weight:700;letter-spacing:0.04em">
+        <div class="cabecalho-lancamentos">
           <span>LANÇAMENTO & DETALHES</span>
-          <span>VALOR (R$)</span>
+          <span class="coluna-valor">VALOR (R$)</span>
         </div>
         <div class="lista" id="itens-container">
           ${itensCarregados.map((l) => itemLancamento(l)).join('')}
