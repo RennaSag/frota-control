@@ -2645,7 +2645,7 @@ async function telaPanorama(alvo) {
         </div>
       </div>
 
-      <p class="ajuda" id="panorama-filtros-ativos"></p><div id="painel"><p class="carregando">Carregando indicadores da frota…</p></div>
+      <p class="ajuda" id="panorama-filtros-ativos" hidden></p><div id="painel"><p class="carregando">Carregando indicadores da frota…</p></div>
     </div>`;
 
   const campoDe = alvo.querySelector('#p-de');
@@ -2682,7 +2682,9 @@ async function telaPanorama(alvo) {
       return;
     }
     if (geracao!==geracaoPanorama) return;
-    alvo.querySelector("#panorama-filtros-ativos").textContent=Object.values(filtros).filter(Boolean).length ? Object.values(rotulosPanorama).filter(Boolean).join(" · ")+". Valores e PDF filtrados. Pendente: geral da frota. Km: viagens do motorista/caminhão." : "Todos os motoristas, caminhões e categorias.";
+    const avisoFiltros=alvo.querySelector("#panorama-filtros-ativos"),comFiltro=Object.values(filtros).filter(Boolean).length>0;
+    avisoFiltros.textContent=comFiltro ? Object.values(rotulosPanorama).filter(Boolean).join(" · ")+". Valores e PDF filtrados. Pendente: geral da frota. Km: viagens do motorista/caminhão." : "";
+    avisoFiltros.hidden=!comFiltro;
 
     const saldo = r.atual.saldo_centavos;
     const saldoAnterior = r.anterior.saldo_centavos;
