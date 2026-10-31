@@ -3,3 +3,10 @@ frota/uploads/*
 !frota/uploads/.htaccess
 !frota/dados/.htaccess
 frota/config.local.php
+
+# Cloudflare: dependências, estado local do wrangler e pacote gerado pelo build
+cloudflare/node_modules/
+cloudflare/.wrangler/
+cloudflare/public/
+cloudflare/.dev.vars
+node_modules/
