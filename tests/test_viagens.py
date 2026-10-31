@@ -37,6 +37,8 @@ def main():
         command += ['-d', 'extension=pdo_sqlite', '-d', 'extension=mbstring', '-d', 'extension=openssl', '-d', 'date.timezone=America/Sao_Paulo', '-S', f'127.0.0.1:{port}', '-t', str(base / 'app')]
         env = dict(os.environ, DATABASE_URL='', FROTA_BANCO='sqlite', FROTA_SQLITE_ARQUIVO=str(base / 'test.sqlite'))
         env['FROTA_ADMIN_SENHA'] = 'admin123'
+        env['FROTA_ADM_USUARIO'] = 'suporte.adm'
+        env['FROTA_ADM_SENHA'] = 'SuporteAdm!2026'
         with (base / 'server.log').open('w') as log:
             server = subprocess.Popen(command, env=env, stdout=log, stderr=log, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
             try:
@@ -243,6 +245,19 @@ def main():
                 assert filtrado['atual']['saidas_centavos']==0 and not filtrado['saidas_por_categoria']
                 assert all(int(d['saidas_centavos'])==0 for d in filtrado['por_dia'])
                 api('GET','resumo',params={'de':'2026-10','ate':'2026-10','usuario_id':'1 OR 1=1'},status=400)
+                # ADM: invisível para o proprietário, restrito às senhas e capaz de redefinir acessos.
+                adm = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+                api('POST', 'login', {'usuario':'suporte.adm', 'senha':'errada-123'}, client=adm, status=401)
+                assert api('POST', 'login', {'usuario':'suporte.adm', 'senha':'SuporteAdm!2026'}, client=adm)['papel'] == 'sistema'
+                assert not any(u['papel']=='sistema' for u in api('GET','usuarios'))
+                assert any(u['usuario']=='motorista' for u in api('GET','adm-usuarios', client=adm))
+                api('GET','lancamentos', client=adm, status=403)
+                api('GET','adm-usuarios', status=404)
+                api('POST','usuarios',{'nome':'Clone','usuario':'suporte.adm','senha':'12345678'}, status=400)
+                api('PUT','adm-usuario',{'senha_nova':'NovaSenha26','ativo':True}, params={'id':driver}, client=adm)
+                api('GET','eu', client=driver_client, status=401)
+                api('POST','login',{'usuario':'motorista','senha':'NovaSenha26'}, client=driver_client)
+                api('PUT','adm-usuario',{'ativo':False}, params={'id':1}, client=adm, status=400)
                 print('OK: migração, endereço, viagens, pagamentos, prazo de 2 minutos, diárias em lote, seleção, histórico, correções, idempotência, rollback e permissões.')
             finally:
                 server.terminate()

@@ -3570,10 +3570,79 @@ button:focus-visible, summary:focus-visible { outline:3px solid var(--primaria);
 .aviso-cep:empty { display: none; }
 .aviso-cep { display: block; margin-top: 4px; }
 
-/* Tutorial de primeiro acesso */
-.tutorial h3 { margin: 4px 0 8px; font-size: 1.1rem; }
-.tutorial p { margin: 0; color: var(--tinta-2); line-height: 1.55; }
-.tutorial .tutorial-contagem { color: var(--tinta-3); font-size: 0.8rem; font-weight: 600; }
-.tutorial-pontos { display: flex; gap: 6px; margin: 18px 0 16px; }
-.tutorial-pontos span { width: 8px; height: 8px; border-radius: var(--raio-pill); background: var(--borda-forte); }
+
+/* Tour de primeiro acesso: destaca a parte da tela e explica num balão ao lado */
+.tour { position: fixed; inset: 0; z-index: 130; }
+.tour-fundo { position: absolute; inset: 0; background: transparent; transition: background 0.25s; }
+.tour-fundo.escuro { background: rgba(15, 23, 42, 0.62); }
+.tour-foco {
+  position: fixed;
+  border-radius: 14px;
+  box-shadow: 0 0 0 3px var(--primaria), 0 0 0 9999px rgba(15, 23, 42, 0.62);
+  pointer-events: none;
+  transition: left 0.3s ease, top 0.3s ease, width 0.3s ease, height 0.3s ease;
+}
+.tour-balao {
+  position: fixed;
+  background: var(--superficie);
+  color: var(--tinta);
+  border-radius: var(--raio);
+  box-shadow: var(--sombra-flutuante);
+  padding: 16px 18px 14px;
+  outline: none;
+  transition: left 0.3s ease, top 0.3s ease, opacity 0.2s;
+}
+.tour-balao.trocando { opacity: 0.55; }
+.tour-seta {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--superficie);
+  transform: translate(-50%, -50%) rotate(45deg);
+  border-radius: 2px;
+}
+.tour-balao[data-lado="abaixo"] .tour-seta { top: 0; }
+.tour-balao[data-lado="acima"] .tour-seta { top: 100%; }
+.tour-balao[data-lado="direita"] .tour-seta { left: 0; }
+.tour-balao[data-lado="esquerda"] .tour-seta { left: 100%; }
+.tour-topo { display: flex; align-items: center; justify-content: space-between; gap: 8px; position: relative; }
+.tour-contagem { color: var(--primaria); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.02em; }
+.tour-fechar {
+  display: grid; place-items: center;
+  width: 30px; height: 30px; margin: -6px -8px 0 0;
+  border: 0; border-radius: var(--raio-pill); background: none; color: var(--tinta-3); cursor: pointer;
+}
+.tour-fechar:hover { background: var(--superficie-2); color: var(--tinta); }
+.tour-fechar svg { width: 16px; height: 16px; }
+.tour-balao h3 { margin: 2px 0 6px; font-size: 1.05rem; position: relative; }
+.tour-balao p { margin: 0; color: var(--tinta-2); line-height: 1.55; font-size: 0.92rem; position: relative; }
+.tour-rodape { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+.tour-rodape .tutorial-pontos { margin: 0; }
+.tour-botoes { display: flex; gap: 8px; margin-left: auto; }
+.tutorial-pontos { display: flex; gap: 6px; }
+.tutorial-pontos span { width: 8px; height: 8px; border-radius: var(--raio-pill); background: var(--borda-forte); transition: width 0.2s; }
 .tutorial-pontos span.ativo { width: 22px; background: var(--primaria); }
+@media (prefers-reduced-motion: reduce) {
+  .tour-foco, .tour-balao, .tour-fundo, .tutorial-pontos span { transition: none; }
+}
+
+/* Tela do ADM (suporte de senhas e acessos) */
+.adm-layout { min-height: 100vh; background: var(--fundo); }
+.adm-topo {
+  position: sticky; top: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px 16px; background: var(--superficie); border-bottom: 1px solid var(--borda);
+}
+.adm-marca { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.adm-marca .icone-frota { width: 36px; height: 36px; }
+.adm-marca .icone-frota img { width: 100%; height: 100%; }
+.adm-marca strong { display: block; font-size: 0.95rem; }
+.adm-marca span { display: block; font-size: 0.75rem; font-weight: 700; color: var(--primaria); text-transform: uppercase; letter-spacing: 0.06em; }
+.adm-conteudo { max-width: 880px; margin: 0 auto; padding: 24px 16px 48px; }
+.adm-busca { max-width: 360px; }
+.adm-senha-nova {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  margin: 0; padding: 12px 14px; border-radius: var(--raio-s); background: var(--primaria-suave);
+}
+.adm-senha-nova span { color: var(--tinta-2); font-weight: 600; }
+.adm-senha-nova code { font-family: var(--fonte-mono); font-size: 1.15rem; font-weight: 600; color: var(--primaria); user-select: all; }

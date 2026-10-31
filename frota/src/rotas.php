@@ -36,7 +36,15 @@ const PAGAMENTOS = ['Dinheiro', 'Cartão da empresa', 'Pix', 'Cartão frete', 'B
 function despacha(string $r, string $metodo)
 {
     $q = $_GET;
+    // O ADM só cuida de senhas e acessos; o resto do sistema fica fechado para ele.
+    if (!in_array("$metodo $r", ROTAS_ADM, true) && (usuarioAtual()['papel'] ?? '') === PAPEL_ADM) {
+        throw new ErroDeUso('O acesso ADM só gerencia senhas e acessos.', 403);
+    }
     switch ("$metodo $r") {
+        case 'GET adm-usuarios':
+            return rotaAdmUsuarios();
+        case 'PUT adm-usuario':
+            return rotaAdmEditaUsuario(campoId($q['id'] ?? null, 'Usuário', true));
         case 'POST login':
             return rotaLogin();
         case 'POST logout':
@@ -200,8 +208,14 @@ function rotaLogin(): array
     if (!podeTentarLogin($chave)) {
         throw new ErroDeUso('Muitas tentativas de senha. Espere alguns minutos e tente de novo.', 429);
     }
+    $adm = entraComoAdm($usuario, $senha);
+    if ($adm !== null) {
+        limpaTentativas($chave);
+        criaSessao($adm);
+        return exigeLogin();
+    }
     $u = umaLinha('SELECT * FROM usuarios WHERE usuario = ?', [$usuario]);
-    if (!$u || !(int) $u['ativo'] || !password_verify($senha, $u['senha_hash'])) {
+    if (!$u || $u['papel'] === PAPEL_ADM || !(int) $u['ativo'] || !password_verify($senha, $u['senha_hash'])) {
         throw new ErroDeUso('Usuário ou senha incorretos.', 401);
     }
     limpaTentativas($chave);
@@ -238,7 +252,8 @@ function rotaUsuarios(): array
     }
     return todas(
         'SELECT id, nome, usuario, papel, telefone, caminhao_padrao_id, valor_diaria_centavos, ativo, criado_em
-           FROM usuarios ORDER BY ativo DESC, papel, nome'
+           FROM usuarios WHERE papel <> ? ORDER BY ativo DESC, papel, nome',
+        [PAPEL_ADM]
     );
 }
 
@@ -269,7 +284,7 @@ function rotaNovoUsuario(): array
     if (mb_strlen($senha) < 4) {
         throw new ErroDeUso('A senha deve ter ao menos 4 caracteres.');
     }
-    if (umValor('SELECT id FROM usuarios WHERE usuario = ?', [$usuario]) !== null) {
+    if ($usuario === loginDoAdm() || umValor('SELECT id FROM usuarios WHERE usuario = ?', [$usuario]) !== null) {
         throw new ErroDeUso('Já existe um usuário com esse login.');
     }
     $id = insere('usuarios', [
@@ -289,7 +304,7 @@ function rotaEditaUsuario(int $id): array
     $eu = exigeAdmin();
     $corpo = corpoJson();
     $u = umaLinha('SELECT * FROM usuarios WHERE id = ?', [$id]);
-    if (!$u) {
+    if (!$u || $u['papel'] === PAPEL_ADM) {
         throw new ErroDeUso('Usuário não encontrado.', 404);
     }
     $papel = ($corpo['papel'] ?? '') === 'admin' ? 'admin' : 'motorista';
@@ -328,7 +343,7 @@ function rotaExcluiUsuario(int $id): array
 {
     $eu = exigeAdmin();
     $u = umaLinha('SELECT * FROM usuarios WHERE id = ?', [$id]);
-    if (!$u) {
+    if (!$u || $u['papel'] === PAPEL_ADM) {
         throw new ErroDeUso('Usuário não encontrado.', 404);
     }
     if ((int) $u['id'] === $eu['id']) {

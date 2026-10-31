@@ -11,7 +11,7 @@ test('Workers: contrato atual, permissões, arquivos e pagamentos atômicos',asy
     for(const row of r.rows||[])for(const field of r.fields||[]){const v=row[field.name];if(v instanceof Date)row[field.name]=field.dataTypeID===1082?v.toISOString().slice(0,10):`${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}${field.dataTypeID===1082?'':` ${String(v.getHours()).padStart(2,'0')}:${String(v.getMinutes()).padStart(2,'0')}:${String(v.getSeconds()).padStart(2,'0')}`}`;else if(typeof v==='bigint')row[field.name]=Number(v);else if(v instanceof Uint8Array)row[field.name]='\\x'+Buffer.from(v).toString('hex');}
     return {rows:r.rows||[],rowCount:r.affectedRows??r.rows?.length??0};
   },async end(){}};
-  const env={FROTA_AMBIENTE:'teste',FROTA_ADMIN_SENHA:'TesteAdmin!2026',__TEST_DB:adapter,ASSETS:{async fetch(req){const file=new URL(req.url).pathname;try{return new Response(await fs.readFile(new URL('../public'+file,import.meta.url)));}catch{return new Response('Não encontrado',{status:404});}}}};
+  const env={FROTA_AMBIENTE:'teste',FROTA_ADMIN_SENHA:'TesteAdmin!2026',FROTA_ADM_USUARIO:'suporte.adm',FROTA_ADM_SENHA:'SuporteAdm!2026',__TEST_DB:adapter,ASSETS:{async fetch(req){const file=new URL(req.url).pathname;try{return new Response(await fs.readFile(new URL('../public'+file,import.meta.url)));}catch{return new Response('Não encontrado',{status:404});}}}};
   async function api(method,route,body=null,{cookie='',params={},id=null,registered=null}={}){
     const headers={'X-App-Frota':'1'};if(cookie)headers.Cookie=cookie;if(id)headers['X-Fila-Id']=id;if(registered)headers['X-Registrado-Em']=String(registered);
     if(body && !(body instanceof FormData))headers['Content-Type']='application/json';
@@ -111,6 +111,26 @@ test('Workers: contrato atual, permissões, arquivos e pagamentos atômicos',asy
     assert.equal(clients.filter(c=>c.nome.toLowerCase()==='cliente histórico').length,1);
     assert.equal(Number((await pg.query('SELECT COUNT(*) AS n FROM lancamentos')).rows[0].n),before);
     assert.equal(Number((await pg.query('SELECT MAX(versao) AS v FROM esquema')).rows[0].v),5);
+  });
+  await t.test('ADM: invisível, restrito e capaz de redefinir senhas',async()=>{
+    assert.equal((await api('POST','login',{usuario:'suporte.adm',senha:'errada-123'})).status,401);
+    const adm=(await api('POST','login',{usuario:'suporte.adm',senha:'SuporteAdm!2026'})).cookie;assert.ok(adm);
+    assert.equal(ok(await api('GET','eu',null,{cookie:adm})).papel,'sistema');
+    const lista=ok(await api('GET','adm-usuarios',null,{cookie:adm}));assert.ok(lista.some(u=>u.usuario==='joao.teste'));assert.ok(!lista.some(u=>u.papel==='sistema'));
+    const doDono=ok(await api('GET','usuarios',null,{cookie:owner}));assert.ok(!doDono.some(u=>u.usuario==='suporte.adm'));
+    const admId=Number((await pg.query("SELECT id FROM usuarios WHERE usuario='suporte.adm'")).rows[0].id);
+    assert.equal((await api('PUT','usuario',{nome:'x',papel:'motorista',ativo:true},{cookie:owner,params:{id:admId}})).status,404);
+    assert.equal((await api('DELETE','usuario',null,{cookie:owner,params:{id:admId}})).status,404);
+    assert.equal((await api('POST','usuarios',{nome:'Clone',usuario:'suporte.adm',senha:'12345678'},{cookie:owner})).status,400);
+    for(const [m,r] of [['GET','lancamentos'],['GET','clientes'],['GET','usuarios'],['POST','trocar-senha']])assert.equal((await api(m,r,m==='GET'?null:{},{cookie:adm})).status,403,r);
+    assert.equal((await api('GET','adm-usuarios',null,{cookie:owner})).status,404);
+    assert.equal((await api('PUT','adm-usuario',{senha_nova:'1234'},{cookie:driver,params:{id:uid}})).status,404);
+    ok(await api('PUT','adm-usuario',{senha_nova:'NovaSenha26'},{cookie:adm,params:{id:uid}}));
+    assert.equal((await api('GET','eu',null,{cookie:driver})).status,401);
+    const relogin=await api('POST','login',{usuario:'joao.teste',senha:'NovaSenha26'});ok(relogin);driver=relogin.cookie;
+    const ownerId=Number((await pg.query("SELECT id FROM usuarios WHERE usuario='admin'")).rows[0].id);
+    assert.equal((await api('PUT','adm-usuario',{ativo:false},{cookie:adm,params:{id:ownerId}})).status,400);
+    assert.equal((await api('PUT','adm-usuario',{senha_nova:'x'},{cookie:adm,params:{id:admId}})).status,404);
   });
   await t.test('Pacote público sem PHP, SQLite, uploads ou segredos',async()=>{
     const promises=[],response=await worker.fetch(new Request('https://frota.test/'),env,{waitUntil(p){promises.push(p);}});const html=await response.text();assert.ok(html.includes('busca.js'));assert.ok(html.includes('viagens.js'));assert.ok(!html.includes('<?'));assert.ok(!html.includes('__FROTA_AMBIENTE__'));

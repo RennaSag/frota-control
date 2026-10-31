@@ -1,0 +1,4 @@
+/sw.js
+  Cache-Control: no-cache
+/assets/*
+  X-Content-Type-Options: nosniff

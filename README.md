@@ -180,6 +180,7 @@ Service worker e push exigem contexto seguro: HTTPS ou `localhost`.
 | `FROTA_MYSQL_HOST` / `_PORTA` / `_BANCO` / `_USUARIO` / `_SENHA` | `127.0.0.1` / `3306` / `frota` / `root` / vazio | Conexão MySQL |
 | `FROTA_SQLITE_ARQUIVO` | `frota/dados/frota.sqlite` | Arquivo SQLite |
 | `FROTA_ADMIN_SENHA` | `admin123` | Senha inicial do `admin` |
+| `FROTA_ADM_USUARIO` / `FROTA_ADM_SENHA` | vazio | Login do ADM de suporte (só redefine senhas e acessos; invisível para proprietário e motoristas). Senha com 8+ caracteres; sem as duas, o ADM fica desativado |
 | `FROTA_PUSH_CONTATO` | `mailto:contato@controle-frota.app` | Campo `sub` do VAPID |
 
 A versão do app fica em `$v` no `frota/index.php`. Ela versiona os assets e o service worker

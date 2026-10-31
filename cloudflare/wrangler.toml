@@ -17,5 +17,12 @@ enabled = true
 
 [vars]
 FROTA_PUSH_CONTATO = "mailto:contato@controle-frota.app"
+# Configuração usada pelo `wrangler preview` (deploys de prévia por branch).
+[previews.vars]
+FROTA_PUSH_CONTATO = "mailto:contato@controle-frota.app"
+
+[previews.placement]
+mode = "smart"
+
 # Configure DATABASE_URL e FROTA_ADMIN_SENHA com wrangler secret put.
 # A prévia PHP e o SQLite locais continuam independentes desta configuração.

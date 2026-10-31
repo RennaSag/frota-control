@@ -10,6 +10,7 @@ error_reporting(E_ALL);
 require __DIR__ . '/src/util.php';
 require __DIR__ . '/src/banco.php';
 require __DIR__ . '/src/sessao.php';
+require __DIR__ . '/src/adm.php';
 require __DIR__ . '/src/rotas.php';
 require __DIR__ . '/src/pdf.php';
 require __DIR__ . '/src/push.php';

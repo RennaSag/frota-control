@@ -496,6 +496,11 @@ const abas = () => (ehAdmin() ? ABAS_ADMIN : ABAS_MOTORISTA);
 async function iniciaApp() {
   document.body.classList.remove('tela-entrada');
   app.innerHTML = '<p class="carregando">Carregando…</p>';
+  // O ADM tem uma tela própria, só de senhas e acessos, sem os dados da frota.
+  if (ehAdm()) {
+    await telaAdm();
+    return;
+  }
   await recarregaBasico();
   if (!abas().some((a) => a.id === estado.aba)) estado.aba = abas()[0].id;
   desenhaEstrutura();
@@ -3054,9 +3059,9 @@ async function telaAjustes(alvo) {
         <div class="secao-card-topo" style="margin-bottom:0">
           <div>
             <h2>Primeiros passos</h2>
-            <p class="ajuda" style="margin:2px 0 0">Reveja o tutorial com as principais funções do app.</p>
+            <p class="ajuda" style="margin:2px 0 0">Refaça o tour guiado pelas principais funções do app.</p>
           </div>
-          <button class="btn pequeno" type="button" id="b-tutorial">${icone('lista')} Ver tutorial</button>
+          <button class="btn pequeno" type="button" id="b-tutorial">${icone('lista')} Fazer o tour</button>
         </div>
       </div>
 

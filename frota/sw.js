@@ -8,7 +8,7 @@ importScripts(`assets/fila.js?v=${encodeURIComponent(VERSAO)}&ambiente=${encodeU
 const CACHE = `controle-frota-${AMBIENTE}-${VERSAO}`;
 const CACHE_FONTES = 'frota-fontes';
 const ESTATICOS = [
-  './', 'assets/estilo.css', 'assets/app.js', 'assets/viagens.js', 'assets/diarias.js', 'assets/offline.js', 'assets/fila.js', 'assets/busca.js', 'assets/ajudas.js', 'assets/cidades.js',
+  './', 'assets/estilo.css', 'assets/app.js', 'assets/viagens.js', 'assets/diarias.js', 'assets/offline.js', 'assets/fila.js', 'assets/busca.js', 'assets/ajudas.js', 'assets/adm.js', 'assets/cidades.js',
   'assets/logo.png', 'assets/logo-64.png', 'assets/logo-512.png', 'assets/icone-maskable-192.png', 'assets/icone-maskable-512.png', 'assets/apple-touch-icon.png', 'manifest.php',
 ];
 // Respostas da API que não vale guardar: arquivos grandes e PDFs gerados na hora.

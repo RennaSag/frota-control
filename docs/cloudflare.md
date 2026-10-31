@@ -34,6 +34,19 @@ npx wrangler secret put DATABASE_URL
 npx wrangler secret put FROTA_ADMIN_SENHA
 ```
 
+Acesso ADM (suporte de senhas, opcional): defina também
+
+```sh
+npx wrangler secret put FROTA_ADM_USUARIO
+npx wrangler secret put FROTA_ADM_SENHA
+```
+
+O ADM entra pela tela de login normal com esse usuário e senha (mínimo de oito
+caracteres). Ele só vê a lista de acessos e pode definir uma nova senha, destravar
+um login ou bloquear/reativar alguém; não acessa os dados da frota. O proprietário e
+os motoristas não veem o ADM em nenhuma lista. Sem essas duas variáveis, o ADM fica
+desativado. Para trocar a senha do ADM, rode o `secret put` de novo.
+
 A conexão PostgreSQL deve ter SSL. A senha inicial é usada somente quando ainda
 não existe proprietário; usuários existentes e hashes bcrypt do PHP são mantidos.
 Para iniciar um banco vazio, a senha inicial precisa ter pelo menos oito caracteres.

@@ -5,9 +5,10 @@ import {
   mesValido, limitesDoMes, mesAnterior, paginacao, hex, aleatorio, deHex, instanteCadastro, normalizaBusca,
 } from './util.js';
 import {
-  exigeLogin, exigeAdmin, ehAdmin, criaSessao, encerraSessao, podeTentarLogin, limpaTentativas,
+  exigeLogin, exigeAdmin, ehAdmin, usuarioAtual, criaSessao, encerraSessao, podeTentarLogin, limpaTentativas,
 } from './sessao.js';
 import { hashSenha, confereSenha } from './banco.js';
+import { PAPEL_ADM, ROTAS_ADM, loginDoAdm, entraComoAdm, rotaAdmUsuarios, rotaAdmEditaUsuario } from './adm.js';
 import { registraAviso, rotaAvisos, rotaAvisosLidos } from './avisos.js';
 import { rotaPushChave, rotaPushInscrever, rotaPushCancelar, rotaPushTeste } from './push.js';
 import {
@@ -35,8 +36,14 @@ const ARQUIVO_VALIDO = /^[A-Za-z0-9._-]+$/;
 export async function despacha(r, metodo) {
   const q = ctx().q;
   if(metodo==='GET' && ['resumo','pdf','pdf-panorama'].includes(r))await exigeAdmin();
+  // O ADM só cuida de senhas e acessos; o resto do sistema fica fechado para ele.
+  if (!ROTAS_ADM.has(`${metodo} ${r}`) && (await usuarioAtual())?.papel === PAPEL_ADM) {
+    throw new ErroDeUso('O acesso ADM só gerencia senhas e acessos.', 403);
+  }
 
   switch (`${metodo} ${r}`) {
+case 'GET adm-usuarios':return rotaAdmUsuarios();
+case 'PUT adm-usuario':return rotaAdmEditaUsuario(campoId(q.id??null,'Usuário',true));
 case 'GET clientes':return rotaClientes();
 case 'POST clientes':return salvaCliente();
 case 'PUT cliente':return salvaCliente(campoId(q.id??null,'Cliente',true));
@@ -175,8 +182,14 @@ async function rotaLogin() {
   if (!(await podeTentarLogin(chave))) {
     throw new ErroDeUso('Muitas tentativas de senha. Espere alguns minutos e tente de novo.', 429);
   }
+  const adm = await entraComoAdm(usuario, senha);
+  if (adm) {
+    await limpaTentativas(chave);
+    await criaSessao(adm);
+    return exigeLogin();
+  }
   const u = await umaLinha('SELECT * FROM usuarios WHERE usuario = ?', [usuario]);
-  if (!u || !Number(u.ativo) || !(await confereSenha(senha, u.senha_hash))) {
+  if (!u || u.papel === PAPEL_ADM || !Number(u.ativo) || !(await confereSenha(senha, u.senha_hash))) {
     throw new ErroDeUso('Usuário ou senha incorretos.', 401);
   }
   await limpaTentativas(chave);
@@ -207,7 +220,8 @@ async function rotaUsuarios() {
   }
   return todas(
     `SELECT id, nome, usuario, papel, telefone, caminhao_padrao_id, valor_diaria_centavos, ativo, criado_em
-       FROM usuarios ORDER BY ativo DESC, papel, nome`
+       FROM usuarios WHERE papel <> ? ORDER BY ativo DESC, papel, nome`,
+    [PAPEL_ADM]
   );
 }
 
@@ -234,7 +248,7 @@ async function rotaNovoUsuario() {
     throw new ErroDeUso('O usuário deve ter de 3 a 40 caracteres: letras, números, ponto ou -.');
   }
   if (tamanho(senha) < 4) throw new ErroDeUso('A senha deve ter ao menos 4 caracteres.');
-  if (await umValor('SELECT id FROM usuarios WHERE usuario = ?', [usuario]) !== null) {
+  if (usuario === loginDoAdm() || await umValor('SELECT id FROM usuarios WHERE usuario = ?', [usuario]) !== null) {
     throw new ErroDeUso('Já existe um usuário com esse login.');
   }
   const id = await insere('usuarios', {
@@ -254,7 +268,7 @@ async function rotaEditaUsuario(id) {
   const eu = await exigeAdmin();
   const corpo = await corpoJson();
   const u = await umaLinha('SELECT * FROM usuarios WHERE id = ?', [id]);
-  if (!u) throw new ErroDeUso('Usuário não encontrado.', 404);
+  if (!u || u.papel === PAPEL_ADM) throw new ErroDeUso('Usuário não encontrado.', 404);
   const papel = (corpo.papel ?? '') === 'admin' ? 'admin' : 'motorista';
   const ativo = campoSimNao(corpo.ativo ?? null);
 
@@ -285,7 +299,7 @@ async function rotaEditaUsuario(id) {
 async function rotaExcluiUsuario(id) {
   const eu = await exigeAdmin();
   const u = await umaLinha('SELECT * FROM usuarios WHERE id = ?', [id]);
-  if (!u) throw new ErroDeUso('Usuário não encontrado.', 404);
+  if (!u || u.papel === PAPEL_ADM) throw new ErroDeUso('Usuário não encontrado.', 404);
   if (Number(u.id) === eu.id) throw new ErroDeUso('Você não pode excluir o seu próprio acesso.');
   if (u.papel === 'admin') {
     throw new ErroDeUso('Acessos de proprietário não podem ser excluídos. Mude para motorista ou bloqueie.');
