@@ -460,6 +460,7 @@ function telaLogin(mensagem) {
           ${campoSenha('senha', 'senha', 'autocomplete="current-password" required')}
         </div>
         <button class="btn principal grande botao-entrar" type="submit">Entrar</button>
+        ${contatoSuporte()}
       </form>
     </div>`;
   aoEnviar(app.querySelector('form'), async (dados) => {
@@ -499,6 +500,7 @@ async function iniciaApp() {
   if (!abas().some((a) => a.id === estado.aba)) estado.aba = abas()[0].id;
   desenhaEstrutura();
   await abreAba(estado.aba);
+  tutorialPrimeiroAcesso();
   Fila.defineMeta('usuario', estado.usuario.id).catch(() => {});
   navigator.storage?.persist?.().catch(() => {});
   atualizaFila();
@@ -1656,6 +1658,7 @@ function organizaFormularioLancamento(form) {
 
 function ligaCamposLancamento(form) {
   organizaFormularioLancamento(form);
+  ligaCidade(form.elements.lugar);
   const campoCategoria = form.elements.categoria_id;
   const blocoLitros = form.querySelector('[data-se="litros"]');
   const blocoDescricao = form.querySelector('[data-se="descricao"]');
@@ -3047,6 +3050,16 @@ async function telaAjustes(alvo) {
         </div>
       </form>
 
+      <div class="cartao">
+        <div class="secao-card-topo" style="margin-bottom:0">
+          <div>
+            <h2>Primeiros passos</h2>
+            <p class="ajuda" style="margin:2px 0 0">Reveja o tutorial com as principais funções do app.</p>
+          </div>
+          <button class="btn pequeno" type="button" id="b-tutorial">${icone('lista')} Ver tutorial</button>
+        </div>
+      </div>
+
       ${cartoesDoAparelho()}
 
       <div style="display:flex;justify-content:flex-end">
@@ -3057,6 +3070,7 @@ async function telaAjustes(alvo) {
     </div>`;
 
   organizaPainelAjustes(alvo, admin);
+  alvo.querySelector('#b-tutorial').onclick = abreTutorial;
 
   aoEnviar(alvo.querySelector('#form-meu-caminhao'),async (dados)=>{
     const r=await api('POST','meu-caminhao',{},dados);

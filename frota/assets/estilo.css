@@ -3532,3 +3532,48 @@ button:focus-visible, summary:focus-visible { outline:3px solid var(--primaria);
 .categoria-grupo-titulo small { font-size:.68rem; color:#64748b; font-weight:400; }
 
 .grafico-fluxo svg { max-height:360px; }
+
+/* Contato de suporte na tela de login */
+.contato-suporte {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--borda);
+}
+.contato-suporte p {
+  margin: 0 0 10px;
+  color: var(--tinta-2);
+  font-size: 0.85rem;
+}
+.contato-suporte-links {
+  display: grid;
+  gap: 8px;
+}
+.contato-suporte-links a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--borda);
+  border-radius: var(--raio-s);
+  color: var(--tinta);
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.contato-suporte-links a:hover { border-color: var(--primaria); color: var(--primaria); }
+.contato-suporte-links svg { width: 18px; height: 18px; flex: none; }
+
+/* Endereço pelo CEP */
+.aviso-cep:empty { display: none; }
+.aviso-cep { display: block; margin-top: 4px; }
+
+/* Tutorial de primeiro acesso */
+.tutorial h3 { margin: 4px 0 8px; font-size: 1.1rem; }
+.tutorial p { margin: 0; color: var(--tinta-2); line-height: 1.55; }
+.tutorial .tutorial-contagem { color: var(--tinta-3); font-size: 0.8rem; font-weight: 600; }
+.tutorial-pontos { display: flex; gap: 6px; margin: 18px 0 16px; }
+.tutorial-pontos span { width: 8px; height: 8px; border-radius: var(--raio-pill); background: var(--borda-forte); }
+.tutorial-pontos span.ativo { width: 22px; background: var(--primaria); }

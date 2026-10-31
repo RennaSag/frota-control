@@ -131,6 +131,7 @@ function abreFormViagem(viagem, aoConcluir, base = {}) {
     else form.elements.cliente_novo.focus();
   };
   organizaEtapasViagem(form);
+  ligaCidade(form.elements.origem); ligaCidade(form.elements.destino);
   ligaArquivo(form, 'v-nota-arquivo', 'nota_arquivo', 'Anexar depois');
   aoEnviar(form, async (dados) => {
     if (!dados.origem.trim() || !dados.destino.trim()) throw new Error('Informe a origem e o destino.');
@@ -214,6 +215,7 @@ function formCliente(c, atualizar) {
     ${c ? `<div class="campo"><label for="c-ativo">Situação</label><select id="c-ativo" name="ativo"><option value="1" ${Number(c.ativo) ? 'selected' : ''}>Ativo</option><option value="0" ${!Number(c.ativo) ? 'selected' : ''}>Arquivado · manter histórico</option></select></div>` : ''}
     <div class="acoes fim"><button class="btn" type="button" data-cancelar>Cancelar</button><button class="btn principal" type="submit">Salvar cliente</button></div></form>`);
   const form = elemento.querySelector('form'); form.querySelector('[data-cancelar]').onclick = fechar;
+  ligaEndereco(form);
   aoEnviar(form, async (dados) => { const r=await api(c ? 'PUT' : 'POST', c ? 'cliente' : 'clientes', c ? { id: c.id } : {}, dados); fechar(); recado(r?.offline ? GUARDADO_OFFLINE : 'Cliente salvo.'); await atualizar(); });
 }
 
