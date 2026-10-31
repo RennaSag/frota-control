@@ -33,9 +33,9 @@ mode = "smart"
 #   npx wrangler hyperdrive create frota-db --connection-string="<a mesma DATABASE_URL>" --caching-disabled
 # e descomente as linhas abaixo com o id que o comando mostrar. Sem isso, o Worker
 # continua usando DATABASE_URL direto, como antes.
-# [[hyperdrive]]
-# binding = "HYPERDRIVE"
-# id = "<id do hyperdrive>"
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "1e629f9c9116439ba7423e86cf30bd84"
 
 # Configure DATABASE_URL e FROTA_ADMIN_SENHA com wrangler secret put.
 # A prévia PHP e o SQLite locais continuam independentes desta configuração.
