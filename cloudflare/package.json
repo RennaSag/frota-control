@@ -12,11 +12,12 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.2.0",
-    "bcryptjs": "^3.0.3"
+    "bcryptjs": "^3.0.3",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
-    "wrangler": "^4.156.0",
     "@electric-sql/pglite": "^0.3.14",
-    "acorn": "^8.15.0"
+    "acorn": "^8.15.0",
+    "wrangler": "^4.156.0"
   }
 }

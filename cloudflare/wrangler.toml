@@ -28,5 +28,14 @@ FROTA_PUSH_CONTATO = "mailto:contato@controle-frota.app"
 [previews.placement]
 mode = "smart"
 
+# Hyperdrive (pool de conexões perto do banco): deixa cada pedido bem mais rápido.
+# Crie uma vez, COM O CACHE DESLIGADO (o app precisa sempre do dado atual):
+#   npx wrangler hyperdrive create frota-db --connection-string="<a mesma DATABASE_URL>" --caching-disabled
+# e descomente as linhas abaixo com o id que o comando mostrar. Sem isso, o Worker
+# continua usando DATABASE_URL direto, como antes.
+# [[hyperdrive]]
+# binding = "HYPERDRIVE"
+# id = "<id do hyperdrive>"
+
 # Configure DATABASE_URL e FROTA_ADMIN_SENHA com wrangler secret put.
 # A prévia PHP e o SQLite locais continuam independentes desta configuração.

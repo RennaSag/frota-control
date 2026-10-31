@@ -805,21 +805,25 @@ async function dadosPanorama(deMes, ateMes) {
   const antAteMes = mesAnterior(deMes);
   const antDeMes = somaMeses(deMes, -meses.length);
 
-  const totais = async (inicio, fim) => {
-    const t = await umaLinha(
-      `SELECT COUNT(*) AS qtd,
-              COALESCE(SUM(CASE WHEN tipo = 'entrada' THEN valor_centavos ELSE 0 END), 0) AS entradas_centavos,
-              COALESCE(SUM(CASE WHEN tipo = 'saida'   THEN valor_centavos ELSE 0 END), 0) AS saidas_centavos
-         FROM ${fonte} l WHERE data BETWEEN ? AND ?`,
-      [inicio, fim]
-    );
-    return {
-      qtd: inteiro(t.qtd),
-      entradas_centavos: inteiro(t.entradas_centavos),
-      saidas_centavos: inteiro(t.saidas_centavos),
-      saldo_centavos: inteiro(t.entradas_centavos) - inteiro(t.saidas_centavos),
-    };
-  };
+  // Período atual e anterior numa consulta só (uma ida ao banco em vez de duas).
+  const antDe = limitesDoMes(antDeMes)[0];
+  const antAte = limitesDoMes(antAteMes)[1];
+  const t = await umaLinha(
+    `SELECT COUNT(*) FILTER (WHERE data BETWEEN ? AND ?) AS a_qtd,
+            COALESCE(SUM(valor_centavos) FILTER (WHERE tipo = 'entrada' AND data BETWEEN ? AND ?), 0) AS a_entradas,
+            COALESCE(SUM(valor_centavos) FILTER (WHERE tipo = 'saida'   AND data BETWEEN ? AND ?), 0) AS a_saidas,
+            COUNT(*) FILTER (WHERE data BETWEEN ? AND ?) AS p_qtd,
+            COALESCE(SUM(valor_centavos) FILTER (WHERE tipo = 'entrada' AND data BETWEEN ? AND ?), 0) AS p_entradas,
+            COALESCE(SUM(valor_centavos) FILTER (WHERE tipo = 'saida'   AND data BETWEEN ? AND ?), 0) AS p_saidas
+       FROM ${fonte} l WHERE data BETWEEN ? AND ? OR data BETWEEN ? AND ?`,
+    [de, ate, de, ate, de, ate, antDe, antAte, antDe, antAte, antDe, antAte, de, ate, antDe, antAte]
+  );
+  const totais = (p) => ({
+    qtd: inteiro(t[`${p}_qtd`]),
+    entradas_centavos: inteiro(t[`${p}_entradas`]),
+    saidas_centavos: inteiro(t[`${p}_saidas`]),
+    saldo_centavos: inteiro(t[`${p}_entradas`]) - inteiro(t[`${p}_saidas`]),
+  });
 
   const combustivel = await umaLinha(
     `SELECT COALESCE(SUM(l.litros), 0) AS litros,
@@ -829,13 +833,16 @@ async function dadosPanorama(deMes, ateMes) {
     [de, ate]
   );
 
-  const porCategoria = (tipo) => todas(
-    `SELECT c.nome, c.icone, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
+  const categoriasDoPeriodo = await todas(
+    `SELECT l.tipo, c.nome, c.icone, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
        FROM ${fonte} l JOIN categorias c ON c.id = l.categoria_id
-      WHERE l.tipo = ? AND l.data BETWEEN ? AND ?
-      GROUP BY c.id, c.nome, c.icone ORDER BY total_centavos DESC`,
-    [tipo, de, ate]
+      WHERE l.tipo IN ('saida', 'entrada') AND l.data BETWEEN ? AND ?
+      GROUP BY l.tipo, c.id, c.nome, c.icone ORDER BY total_centavos DESC`,
+    [de, ate]
   );
+  const porCategoria = (tipo) => categoriasDoPeriodo
+    .filter((linha) => linha.tipo === tipo)
+    .map(({ tipo: _tipo, ...linha }) => linha);
 
   const coluna = sqlMes('data');
   const porMes = {};
@@ -876,13 +883,18 @@ async function dadosPanorama(deMes, ateMes) {
       GROUP BY cm.id, cm.placa, cm.apelido ORDER BY saidas_centavos DESC`,
     [de, ate]
   );
+  const kmPorCaminhao = {};
+  if (caminhoes.some((cm) => cm.id)) {
+    for (const k of await todas(
+      `SELECT caminhao_id, COALESCE(SUM(km_final - km_inicial), 0) AS km FROM viagens
+        WHERE caminhao_id IS NOT NULL AND km_final IS NOT NULL AND km_inicial IS NOT NULL
+          AND inicio BETWEEN ? AND ? ${viagemExtra}
+        GROUP BY caminhao_id`,
+      [de, ate]
+    )) kmPorCaminhao[k.caminhao_id] = k.km;
+  }
   for (const cm of caminhoes) {
-    cm.km_rodados = cm.id ? inteiro(await umValor(
-      `SELECT COALESCE(SUM(km_final - km_inicial), 0) FROM viagens
-        WHERE caminhao_id = ? AND km_final IS NOT NULL AND km_inicial IS NOT NULL
-          AND inicio BETWEEN ? AND ? ${viagemExtra}`,
-      [cm.id, de, ate]
-    )) : 0;
+    cm.km_rodados = cm.id ? inteiro(kmPorCaminhao[cm.id] ?? 0) : 0;
     cm.saldo_centavos = inteiro(cm.entradas_centavos) - inteiro(cm.saidas_centavos);
   }
 
@@ -891,13 +903,13 @@ async function dadosPanorama(deMes, ateMes) {
     ate: ateMes,
     anterior_de: antDeMes,
     anterior_ate: antAteMes,
-    atual: await totais(de, ate),
-    anterior: await totais(limitesDoMes(antDeMes)[0], limitesDoMes(antAteMes)[1]),
+    atual: totais('a'),
+    anterior: totais('p'),
     litros: parseFloat(combustivel.litros),
     combustivel_centavos: inteiro(combustivel.centavos),
     meses: serie,
-    saidas_por_categoria: await porCategoria('saida'),
-    entradas_por_categoria: await porCategoria('entrada'),
+    saidas_por_categoria: porCategoria('saida'),
+    entradas_por_categoria: porCategoria('entrada'),
     por_caminhao: caminhoes,
     por_motorista: await todas(
       // Salário e diárias são pagos ao motorista, não gastos feitos por ele na estrada.

@@ -110,7 +110,7 @@ test('Workers: contrato atual, permissões, arquivos e pagamentos atômicos',asy
     const clients=ok(await api('GET','clientes',null,{cookie:owner}));
     assert.equal(clients.filter(c=>c.nome.toLowerCase()==='cliente histórico').length,1);
     assert.equal(Number((await pg.query('SELECT COUNT(*) AS n FROM lancamentos')).rows[0].n),before);
-    assert.equal(Number((await pg.query('SELECT MAX(versao) AS v FROM esquema')).rows[0].v),5);
+    assert.equal(Number((await pg.query('SELECT MAX(versao) AS v FROM esquema')).rows[0].v),6);
   });
   await t.test('ADM: invisível, restrito e capaz de redefinir senhas',async()=>{
     assert.equal((await api('POST','login',{usuario:'suporte.adm',senha:'errada-123'})).status,401);

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Client } from '@neondatabase/serverless';
+import pg from 'pg';
 
 // Cada pedido roda dentro do seu próprio contexto (conexão com o banco, sessão, parâmetros),
 // assim as funções das rotas ficam como no PHP, sem precisar passar tudo de mão em mão.
@@ -42,6 +43,17 @@ const TIPOS = {
 
 export async function abreBanco(env) {
   if(env.FROTA_AMBIENTE==='teste' && env.__TEST_DB)return env.__TEST_DB;
+  // Com o Hyperdrive ligado (binding HYPERDRIVE no wrangler.toml), a conexão sai de um pool já
+  // aberto perto do banco: o pedido não paga mais TLS + autenticação do zero a cada vez.
+  if (env.HYPERDRIVE?.connectionString) {
+    const cliente = new pg.Client({ connectionString: env.HYPERDRIVE.connectionString, types: TIPOS });
+    try {
+      await cliente.connect();
+    } catch (e) {
+      throw new ErroDeUso('Não foi possível conectar ao banco. Confira a configuração do servidor.',500);
+    }
+    return cliente;
+  }
   const url = env.DATABASE_URL || '';
   if (!url) {
     throw new ErroDeUso('Não foi possível conectar no PostgreSQL. Confira a variável DATABASE_URL.', 500);

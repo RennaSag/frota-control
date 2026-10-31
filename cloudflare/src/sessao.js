@@ -32,13 +32,23 @@ function lePhp(dados) {
   return m ? Number(m[1]) : null;
 }
 
-async function idDaSessao() {
+const CAMPOS_USUARIO = 'u.id, u.nome, u.usuario, u.papel, u.telefone, u.caminhao_padrao_id, u.valor_diaria_centavos';
+
+// Sessão e usuário saem numa consulta só: isso roda em quase todo pedido, e cada consulta
+// a menos é uma ida e volta a menos até o banco.
+async function leSessaoComUsuario() {
   const c = ctx();
-  if (c.sessao !== undefined) return c.sessao;
   c.sessao = null;
   const id = idDoCookie();
   if (!id) return null;
-  const linha = await umaLinha('SELECT dados, expira FROM sessoes WHERE id = ? AND expira > ?', [id, time()]);
+  const linha = await umaLinha(
+    `SELECT s.dados, s.expira, ${CAMPOS_USUARIO}
+       FROM sessoes s
+       LEFT JOIN usuarios u
+         ON u.ativo = 1 AND u.id = CAST(substring(s.dados FROM 'usuario_id\\|i:([0-9]+);') AS INTEGER)
+      WHERE s.id = ? AND s.expira > ?`,
+    [id, time()]
+  );
   if (!linha) return null;
   const usuarioId = lePhp(linha.dados);
   if (!usuarioId) return null;
@@ -48,22 +58,24 @@ async function idDaSessao() {
     mandaCookie(id, DURACAO);
   }
   c.sessao = { id, usuarioId };
-  return c.sessao;
+  const { dados, expira, ...u } = linha;
+  return u.id !== null && Number(u.id) === usuarioId ? u : null;
 }
 
 export async function usuarioAtual() {
   const c = ctx();
   if (c.usuario !== undefined) return c.usuario;
-  const sessao = await idDaSessao();
-  if (!sessao) {
+  let u = null;
+  if (c.sessao === undefined) {
+    u = await leSessaoComUsuario();
+  } else if (c.sessao) {
+    // Sessão recém-criada no login: só falta o usuário.
+    u = await umaLinha(`SELECT ${CAMPOS_USUARIO} FROM usuarios u WHERE u.id = ? AND u.ativo = 1`, [c.sessao.usuarioId]);
+  }
+  if (!c.sessao) {
     c.usuario = null;
     return null;
   }
-  const u = await umaLinha(
-    `SELECT id, nome, usuario, papel, telefone, caminhao_padrao_id, valor_diaria_centavos
-       FROM usuarios WHERE id = ? AND ativo = 1`,
-    [sessao.usuarioId]
-  );
   if (!u) {
     await encerraSessao();
     c.usuario = null;
