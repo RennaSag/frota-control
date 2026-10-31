@@ -2,7 +2,9 @@
 require __DIR__ . '/config.php';
 $nome = htmlspecialchars(NOME_SISTEMA, ENT_QUOTES, 'UTF-8');
 // Subir a versão renova o cache do app nos aparelhos (o sw.js usa este número).
-$v = '3.2.0';
+$v = '7.1.0';
+$destino = PG_URL !== '' ? parse_url(PG_URL) : [];
+$ambiente = conf('AMBIENTE', '') === 'demonstracao' ? 'demonstracao' : substr(hash('sha256', BANCO . ':' . ($destino['host'] ?? SQLITE_ARQUIVO) . ':' . ($destino['path'] ?? '')), 0, 16);
 ?>
 <!doctype html>
 <html lang="pt-BR">
@@ -26,8 +28,12 @@ $v = '3.2.0';
 </head>
 <body>
   <div id="app"><p class="carregando">Carregando…</p></div>
-  <script>window.NOME_SISTEMA = <?= json_encode(NOME_SISTEMA) ?>; window.VERSAO_APP = <?= json_encode($v) ?>;</script>
+  <script>window.FROTA_AMBIENTE = <?= json_encode($ambiente) ?>; window.NOME_SISTEMA = <?= json_encode(NOME_SISTEMA) ?>; window.VERSAO_APP = <?= json_encode($v) ?>; window.AMBIENTE_DEMO = <?= json_encode(conf('AMBIENTE', '') === 'demonstracao') ?>;</script>
+  <script src="assets/busca.js?v=<?= $v ?>"></script>
   <script src="assets/fila.js?v=<?= $v ?>"></script>
+  <script src="assets/offline.js?v=<?= $v ?>"></script>
+  <script src="assets/diarias.js?v=<?= $v ?>"></script>
+  <script src="assets/viagens.js?v=<?= $v ?>"></script>
   <script src="assets/app.js?v=<?= $v ?>"></script>
 </body>
 </html>

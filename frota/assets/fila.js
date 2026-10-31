@@ -4,9 +4,10 @@
 // É um script comum (sem import/export) porque o sw.js também carrega este arquivo.
 (function (global) {
   const NOME_BANCO = 'frota-offline';
+  const AMBIENTE=global.FROTA_AMBIENTE || new URL(global.location.href).searchParams.get('ambiente') || 'padrao';
   const LOCAL = 'local:';
   // Rotas que podem esperar na fila. Editar e excluir precisam de internet.
-  const ROTAS = ['lancamentos', 'viagens', 'viagem-encerrar', 'notas', 'diarias'];
+  const ROTAS = ['lancamentos', 'viagens', 'viagem-encerrar', 'viagem-pagamento', 'notas', 'diarias', 'clientes', 'caminhoes', 'categorias', 'diarias-pagar', 'recebiveis', 'recebivel-receber', 'meu-caminhao'];
   const API = new URL('api.php', global.location.href).href;
 
   let conexao = null;
@@ -43,11 +44,17 @@
   const apaga = (loja, id) => usa(loja, 'readwrite', (s) => s.delete(id));
   const todos = (loja) => usa(loja, 'readonly', (s) => s.getAll());
 
-  async function meta(chave, padrao = null) {
-    const linha = await pega('meta', chave);
-    return linha ? linha.valor : padrao;
+  let legadoPromise;
+  function ambienteLegado() {
+    if(!legadoPromise) legadoPromise=(async()=>{const atual=await pega('meta','ambiente-legado');if(atual)return atual.valor;await grava('meta',{chave:'ambiente-legado',valor:AMBIENTE});return AMBIENTE;})();
+    return legadoPromise;
   }
-  const defineMeta = (chave, valor) => grava('meta', { chave, valor });
+  async function meta(chave, padrao = null) {
+    let linha=await pega('meta',AMBIENTE+':'+chave);
+    if(!linha && await ambienteLegado()===AMBIENTE) linha=await pega('meta',chave);
+    return linha ? linha.valor:padrao;
+  }
+  const defineMeta=(chave,valor)=>grava('meta',{chave:AMBIENTE+':'+chave,valor});
 
   function novoId() {
     if (global.crypto?.randomUUID) return global.crypto.randomUUID();
@@ -83,10 +90,10 @@
     return ehLocal(ref) ? pega('arquivos', ref.slice(LOCAL.length)) : null;
   }
 
-  async function adiciona({ id, usuarioId, metodo = 'POST', rota, params = {}, corpo = null, resumo = '' }) {
+  async function adiciona({ id, usuarioId, metodo = 'POST', rota, params = {}, corpo = null, resumo = '', criadoEm = Date.now() }) {
     const envio = {
       id: id || novoId(), usuarioId, metodo, rota, params, corpo, resumo,
-      criadoEm: Date.now(), erro: null,
+      criadoEm, ambiente:AMBIENTE, erro: null,
     };
     envio.ref = LOCAL + envio.id;
     await grava('envios', envio);
@@ -95,7 +102,9 @@
 
   async function lista(usuarioId) {
     const envios = await todos('envios');
+    const legado=await ambienteLegado();
     return envios
+      .filter((e)=>(e.ambiente || legado)===AMBIENTE)
       .filter((e) => usuarioId == null || e.usuarioId === usuarioId)
       .sort((a, b) => a.criadoEm - b.criadoEm);
   }
@@ -143,13 +152,15 @@
 
   async function pedido(url, opcoes) {
     let resposta;
+    const controle = new AbortController();
+    const tempo = setTimeout(()=>controle.abort(),25000);
     try {
-      resposta = await fetch(url, { credentials: 'same-origin', ...opcoes });
+      resposta = await fetch(url, { credentials: 'same-origin', ...opcoes, signal:controle.signal });
     } catch {
-      throw new SemRede('Sem internet.');
+      clearTimeout(tempo); throw new SemRede('Sem internet.');
     }
     let dados = null;
-    try { dados = await resposta.json(); } catch { /* corpo vazio ou HTML */ }
+    try { dados = await resposta.json(); } catch { if(resposta.ok) throw new SemRede('Resposta incompleta.'); } finally { clearTimeout(tempo); }
     return { status: resposta.status, ok: resposta.ok, dados };
   }
 
@@ -200,7 +211,7 @@
         }
         const r = falhou || await pedido(endereco(envio.rota, troca(envio.params, mapa)), {
           method: envio.metodo,
-          headers: { 'X-App-Frota': '1', 'X-Fila-Id': envio.id, 'Content-Type': 'application/json' },
+          headers: { 'X-App-Frota': '1', 'X-Fila-Id': envio.id, 'X-Registrado-Em': String(envio.criadoEm), 'Content-Type': 'application/json' },
           body: envio.corpo ? JSON.stringify(troca(envio.corpo, mapa)) : undefined,
         });
         if (r.status === 401) { resultado.sessao = true; break; }
@@ -215,6 +226,7 @@
           mapa[envio.ref] = r.dados.id;
           await defineMeta('mapa', mapa);
         }
+        if(r.dados?.ids_por_data) { for(const [dia,id] of Object.entries(r.dados.ids_por_data)) mapa[envio.ref+'@'+dia]=id; await defineMeta('mapa',mapa); }
         resultado.respostas[envio.id] = r.dados;
         await remove(envio.id);
         resultado.enviados++;
@@ -227,7 +239,7 @@
   }
 
   global.Fila = {
-    LOCAL, ROTAS, CACHE_DADOS: 'frota-dados',
+    LOCAL, ROTAS, CACHE_DADOS: 'frota-dados-'+AMBIENTE,
     novoId, ehLocal, refsLocais, guardaArquivo, arquivo, adiciona, lista, remove, tentaDeNovo,
     processa, limpaArquivosSoltos, meta, defineMeta,
   };

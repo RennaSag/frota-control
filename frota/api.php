@@ -27,12 +27,15 @@ try {
             responde($repetido);
         }
     }
+    $transacaoFila = $envio !== null && ($_GET['r'] ?? '') !== 'comprovante';
+    if ($transacaoFila) banco()->beginTransaction();
     try {
         $resposta = despacha(
             (string) ($_GET['r'] ?? ''),
             strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET')
         );
     } catch (Throwable $e) {
+        if ($transacaoFila && banco()->inTransaction()) banco()->rollBack();
         if ($envio !== null) {
             liberaEnvio($envio);
         }
@@ -41,6 +44,7 @@ try {
     if ($envio !== null) {
         guardaEnvio($envio, $resposta);
     }
+    if ($transacaoFila && banco()->inTransaction()) banco()->commit();
     responde($resposta);
 } catch (ErroDeUso $e) {
     $status = $e->getCode();

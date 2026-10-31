@@ -2,27 +2,27 @@
 // quando o sinal volta e mostra as notificações push (mesmo com o app fechado).
 // A versão vem do index.php (sw.js?v=...): trocou a versão, o cache da casca é refeito.
 const VERSAO = new URL(self.location.href).searchParams.get('v') || 'dev';
-importScripts(`assets/fila.js?v=${encodeURIComponent(VERSAO)}`);
+const AMBIENTE = new URL(self.location.href).searchParams.get('ambiente') || 'padrao';
+importScripts(`assets/fila.js?v=${encodeURIComponent(VERSAO)}&ambiente=${encodeURIComponent(AMBIENTE)}`);
 
-const CACHE = `controle-frota-${VERSAO}`;
+const CACHE = `controle-frota-${AMBIENTE}-${VERSAO}`;
 const CACHE_FONTES = 'frota-fontes';
 const ESTATICOS = [
-  './', 'assets/estilo.css', 'assets/app.js', 'assets/fila.js',
-  'assets/logo.png', 'assets/logo-64.png', 'assets/apple-touch-icon.png', 'manifest.php',
+  './', 'assets/estilo.css', 'assets/app.js', 'assets/viagens.js', 'assets/diarias.js', 'assets/offline.js', 'assets/fila.js', 'assets/busca.js',
+  'assets/logo.png', 'assets/logo-64.png', 'assets/logo-512.png', 'assets/icone-maskable-192.png', 'assets/icone-maskable-512.png', 'assets/apple-touch-icon.png', 'manifest.php',
 ];
 // Respostas da API que não vale guardar: arquivos grandes e PDFs gerados na hora.
-const NAO_GUARDAR = ['comprovante', 'pdf', 'pdf-panorama', 'push-chave'];
+const NAO_GUARDAR = ['comprovante', 'pdf', 'pdf-panorama', 'push-chave', 'eu'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ESTATICOS)).catch(() => {}));
-  self.skipWaiting();
+  e.waitUntil(caches.open(CACHE).then(async (c) => { await c.addAll(ESTATICOS); await self.skipWaiting(); }));
 });
 
 self.addEventListener('activate', (e) => {
   const manter = [CACHE, CACHE_FONTES, Fila.CACHE_DADOS];
   e.waitUntil(
     caches.keys()
-      .then((chaves) => Promise.all(chaves.filter((k) => !manter.includes(k)).map((k) => caches.delete(k))))
+      .then((chaves) => Promise.all(chaves.filter((k) => !manter.includes(k) && !k.startsWith(Fila.CACHE_DADOS+'-')).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
@@ -54,18 +54,21 @@ self.addEventListener('fetch', (e) => {
 
 // Casca do app: sempre tenta a versão nova e guarda; sem rede, usa a guardada.
 async function primeiroRede(pedido, alternativa) {
+  const controle=new AbortController();
+  const limite=setTimeout(()=>controle.abort(),5000);
   try {
-    const resposta = await fetch(pedido);
+    const resposta = await fetch(pedido,{signal:controle.signal});
+    if(resposta.status >= 500) throw new Error('Servidor indisponível');
     if (resposta.ok && resposta.type === 'basic') {
       const copia = resposta.clone();
-      caches.open(CACHE).then((c) => c.put(pedido, copia)).catch(() => {});
+      await caches.open(CACHE).then((c) => c.put(pedido, copia)).catch(() => {});
     }
     return resposta;
   } catch (erro) {
     const guardada = await alternativa();
     if (guardada) return guardada;
     throw erro;
-  }
+  } finally {clearTimeout(limite);}
 }
 
 async function primeiroCache(pedido, nomeCache) {
@@ -83,9 +86,11 @@ async function primeiroCache(pedido, nomeCache) {
 // A resposta guardada volta com o cabeçalho X-Frota-Offline, para a tela avisar que é antiga.
 // Com sinal fraco, depois de 8 s usa a guardada (se houver) em vez de deixar a tela esperando.
 async function dadosDaRede(pedido) {
-  const cache = await caches.open(Fila.CACHE_DADOS);
-  const daRede = fetch(pedido).then((resposta) => {
-    if (resposta.ok) cache.put(pedido, resposta.clone()).catch(() => {});
+  const usuario=pedido.headers.get('X-App-Usuario') || 'sessao';
+  const cache = await caches.open(Fila.CACHE_DADOS+'-'+usuario);
+  const daRede = fetch(pedido).then(async (resposta) => {
+    if(resposta.status >= 500) throw new Error('Servidor indisponível');
+    if (resposta.ok) await cache.put(pedido, resposta.clone()).catch(() => {});
     return resposta;
   });
   const guardada = () => cache.match(pedido).then((r) => (r ? marcaOffline(r) : null));
@@ -173,7 +178,9 @@ self.addEventListener('push', (e) => {
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const destino = e.notification.data?.url || './';
+  let destino=new URL(e.notification.data?.url || './',self.location.href);
+  if(destino.origin!==self.location.origin || !destino.href.startsWith(self.registration.scope)) destino=new URL('./',self.location.href);
+  destino=destino.href;
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((janelas) => {
       if (!janelas.length) return self.clients.openWindow(destino);

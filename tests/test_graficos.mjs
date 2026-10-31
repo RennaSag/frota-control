@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+const codigo=fs.readFileSync(new URL('../frota/assets/app.js',import.meta.url),'utf8');
+const inicio=codigo.indexOf('function serieGrafico('),fim=codigo.indexOf('function graficoFluxo(',inicio);
+const contexto={window:{innerWidth:1200},mesCurto:mes=>mes};vm.createContext(contexto);vm.runInContext(codigo.slice(inicio,fim),contexto);
+const dados={por_dia:[{data:'2026-02-01',entradas_centavos:12000,saidas_centavos:1000},{data:'2026-02-08',entradas_centavos:15000,saidas_centavos:900},{data:'2026-02-28',entradas_centavos:100,saidas_centavos:300}],meses:[{mes:'2026-01',entradas_centavos:200,saidas_centavos:100},{mes:'2026-02',entradas_centavos:0,saidas_centavos:0}]};
+const diario=contexto.serieGrafico(dados,false,'2026-02');assert.equal(diario.length,28);
+contexto.window.innerWidth=390;const semanal=contexto.serieGrafico(dados,false,'2026-02');assert.equal(semanal.length,4);
+for(const campo of ['entrada','saida'])assert.equal(semanal.reduce((s,d)=>s+d[campo],0),diario.reduce((s,d)=>s+d[campo],0));
+assert.equal(semanal[0].entrada,12000);assert.equal(semanal[1].entrada,15000);assert.equal(semanal[3].saida,300);
+assert.equal(contexto.serieGrafico(dados,true,'2026-01').length,2);
+const pizza=codigo.slice(codigo.indexOf('function desenhaGraficoPizza('),codigo.indexOf('function somaMeses('));
+Object.assign(contexto,{esc:String,dinheiro:String,dinheiroCurto:String});vm.runInContext(pizza,contexto);
+const html=contexto.desenhaGraficoPizza({saidas_por_categoria:[{nome:'Única categoria',total_centavos:100}],atual:{saidas_centavos:100}});
+assert.ok(html.includes('<circle'));assert.ok(html.includes('100%'));
+console.log('OK: gráficos preservam os totais entre dias e semanas; categoria única aparece na distribuição.');

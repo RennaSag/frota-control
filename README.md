@@ -1,5 +1,7 @@
 # Controle da Frota
 
+Versão 7: buscas por palavras-chave, filtros combinados, viagens em etapas, cartões reorganizados, pagamento de diárias offline e execução em Cloudflare Workers. Veja [a revisão do PWA](docs/pwa-revisao.md), [o guia de Cloudflare](docs/cloudflare.md) e os testes em `tests/` e `cloudflare/tests/`.
+
 Sistema web de controle financeiro para frotas de caminhões: fretes, gastos, viagens, notas
 fiscais e diárias de motoristas, com dois níveis de acesso (motorista e proprietário). É um
 PWA instalável que funciona sem internet.

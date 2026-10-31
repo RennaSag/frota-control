@@ -15,6 +15,7 @@ const estado = {
   usuarios: [],
   viagensAbertas: [],
   recebiveisAbertos: [],
+  clientes: [],
   mes: hoje().slice(0, 7),
   filtros: {
     de: `${hoje().slice(0, 7)}-01`,
@@ -170,10 +171,15 @@ function tempoLimite(ms) {
 // e a tela recebe { offline: true, id: 'local:...' }. Cada envio leva um X-Fila-Id: se a resposta
 // se perder no caminho, o reenvio pela fila não grava duas vezes.
 async function api(metodo, rota, params = {}, corpo = null) {
+  const registradoEm = Date.now();
+  if (metodo === 'GET' && (navigator.onLine === false || Fila.refsLocais(params).size)) {
+    const guardados = await dadosOffline(rota,params);
+    if (guardados != null) { marcaOffline(true); return guardados; }
+  }
   const podeEsperar = metodo === 'POST' && Fila.ROTAS.includes(rota) && Boolean(estado.usuario);
   const filaId = podeEsperar ? Fila.novoId() : null;
   if (podeEsperar && (navigator.onLine === false || Fila.refsLocais([params, corpo]).size)) {
-    return guardaNaFila(filaId, rota, params, corpo);
+    return guardaNaFila(filaId, rota, params, corpo, registradoEm);
   }
   let resposta;
   try {
@@ -181,7 +187,8 @@ async function api(metodo, rota, params = {}, corpo = null) {
       method: metodo,
       headers: {
         'X-App-Frota': '1',
-        ...(filaId ? { 'X-Fila-Id': filaId } : {}),
+        ...(estado.usuario ? {'X-App-Usuario':String(estado.usuario.id)}:{}),
+        ...(filaId ? { 'X-Fila-Id': filaId, 'X-Registrado-Em': String(registradoEm) } : {}),
         ...(corpo ? { 'Content-Type': 'application/json' } : {}),
       },
       credentials: 'same-origin',
@@ -189,26 +196,31 @@ async function api(metodo, rota, params = {}, corpo = null) {
       signal: podeEsperar ? tempoLimite(20000) : undefined,
     });
   } catch {
-    if (podeEsperar) return guardaNaFila(filaId, rota, params, corpo);
+    if (podeEsperar) return guardaNaFila(filaId, rota, params, corpo, registradoEm);
+    if(metodo === 'GET') { const copia=await dadosOffline(rota,params); if(copia != null) { marcaOffline(true);return copia; } }
     marcaOffline(true);
     throw erroSemInternet();
   }
   const offline = resposta.headers.get('X-Frota-Offline');
   if (metodo === 'GET') marcaOffline(Boolean(offline));
   if (resposta.status === 401 && estado.usuario) {
+    await Fila.defineMeta('sessao-offline',null);
     estado.usuario = null;
     telaLogin('Sua sessão expirou. Entre novamente.');
     throw new Error('Sessão expirada.');
   }
-  const texto = await resposta.text();
+  let texto;
+  try { texto=await resposta.text(); } catch { if(podeEsperar) return guardaNaFila(filaId,rota,params,corpo,registradoEm); throw erroSemInternet(); }
   let dados = null;
   try {
     dados = texto ? JSON.parse(texto) : null;
   } catch {
-    throw new Error('O servidor respondeu de forma inesperada. Veja se o PHP está rodando.');
+    throw new Error('Não foi possível ler a resposta do servidor. Recarregue a página e tente novamente.');
   }
-  if (offline === 'vazio') throw erroSemInternet(dados?.erro);
+  if (offline === 'vazio') { const copia=await dadosOffline(rota,params); if(copia != null) return copia; throw erroSemInternet(dados?.erro); }
+  if (podeEsperar && (resposta.status >= 500 || resposta.status === 409)) return guardaNaFila(filaId,rota,params,corpo,registradoEm);
   if (!resposta.ok) throw new Error(dados?.erro || 'Não foi possível concluir.');
+  if(metodo === 'GET') { if(!offline) await memorizaDados(rota,params,dados).catch(()=>{}); return incorporaCadastros(rota,dados,params); }
   return dados;
 }
 
@@ -287,7 +299,7 @@ function campoArquivo(id, rotulo, dica, oculto, valor, textoVazio = 'Nenhum arqu
 }
 
 // Prazo do motorista para corrigir o que registrou (o servidor é quem decide; aqui só mostra).
-const MINUTOS_PARA_CORRIGIR = 5;
+const MINUTOS_PARA_CORRIGIR = 2;
 
 function textoPrazo(segundos) {
   const min = Math.max(1, Math.ceil(Number(segundos) / 60));
@@ -296,6 +308,7 @@ function textoPrazo(segundos) {
 
 function avisoPrazo(registro) {
   if (ehAdmin()) return '';
+  if (registro.offline) return '<p class="aviso info">Guardado no aparelho · aguardando sincronização.</p>';
   if (registro.pode_alterar) {
     return `<p class="aviso info" data-prazo>${icone('relogio')} ${esc(textoPrazo(registro.segundos_para_alterar))}</p>`;
   }
@@ -330,7 +343,9 @@ function recado(mensagem) {
 }
 
 function janela(titulo, corpoHtml) {
-  document.querySelector('.janela')?.remove();
+  const anterior = [...document.querySelectorAll('.janela')].findLast((j) => !j.hidden);
+  if (anterior) { anterior.hidden = true; anterior.inert = true; }
+  const focoAnterior = document.activeElement;
   const fundo = document.createElement('div');
   fundo.className = 'janela';
   fundo.innerHTML = `
@@ -339,13 +354,34 @@ function janela(titulo, corpoHtml) {
       <h2>${esc(titulo)}</h2>
       <div class="corpo-janela">${corpoHtml}</div>
     </div>`;
-  const fechar = () => fundo.remove();
+  const fechar = () => {
+    document.removeEventListener('keydown', escuta);
+    fundo.remove(); fundo.dispatchEvent(new Event('janela-fechada'));
+    if (anterior?.isConnected) { anterior.hidden = false; anterior.inert = false; anterior.dispatchEvent(new Event('retomar-janela')); }
+    if (focoAnterior?.isConnected) focoAnterior.focus();
+  };
+  const escuta = (e) => {
+    if (fundo.hidden || !fundo.isConnected) return;
+    if (e.key === 'Escape') { e.preventDefault(); fechar(); }
+    if (e.key !== 'Tab') return;
+    const campos = [...fundo.querySelectorAll('button, input, select, textarea, a[href], [tabindex="0"]')]
+      .filter((el) => !el.disabled && el.getClientRects().length && el.type !== 'hidden');
+    const primeiro = campos[0], ultimo = campos[campos.length - 1];
+    if (!primeiro) return;
+    if (e.shiftKey && (document.activeElement === primeiro || !campos.includes(document.activeElement))) {
+      e.preventDefault(); ultimo.focus();
+    } else if (!e.shiftKey && (document.activeElement === ultimo || !campos.includes(document.activeElement))) {
+      e.preventDefault(); primeiro.focus();
+    }
+  };
+  fundo.addEventListener('fechar-janela', fechar, { once: true });
   fundo.querySelector('.fechar').onclick = fechar;
   fundo.onclick = (e) => { if (e.target === fundo) fechar(); };
-  document.addEventListener('keydown', function escuta(e) {
-    if (e.key === 'Escape') { fechar(); document.removeEventListener('keydown', escuta); }
-  });
+  document.addEventListener('keydown', escuta);
   document.body.appendChild(fundo);
+  const dialogo = fundo.querySelector('[role="dialog"]');
+  dialogo.tabIndex = -1;
+  dialogo.focus({ preventScroll: true });
   return { elemento: fundo.querySelector('.corpo-janela'), fechar };
 }
 
@@ -387,6 +423,8 @@ function mostraErro(form, mensagem) {
 function aoEnviar(form, acao) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const invalido=[...form.elements].find((el)=>el.willValidate && el.getClientRects().length && !el.checkValidity());
+    if(invalido) { invalido.reportValidity(); return; }
     const botao = form.querySelector('button[type="submit"]');
     const rotulo = botao?.textContent;
     form.querySelector('.aviso.erro')?.remove();
@@ -427,8 +465,9 @@ function telaLogin(mensagem) {
   aoEnviar(app.querySelector('form'), async (dados) => {
     if (!dados.usuario?.trim() || !dados.senha) throw new Error('Preencha usuário e senha.');
     estado.usuario = await api('POST', 'login', {}, dados);
+    await memorizaDados('eu',{},estado.usuario);
     // Dados guardados de outra conta neste aparelho não podem aparecer para quem entrou.
-    try { await caches.delete(Fila.CACHE_DADOS); } catch { /* sem Cache Storage */ }
+    try { await Promise.all((await caches.keys()).filter((k)=>k.startsWith(Fila.CACHE_DADOS)).map((k)=>caches.delete(k))); } catch { /* sem Cache Storage */ }
     await iniciaApp();
   });
 }
@@ -437,7 +476,6 @@ function telaLogin(mensagem) {
 const ABAS_MOTORISTA = [
   { id: 'meus', ico: 'lista', nome: 'Meus gastos', curto: 'Gastos' },
   { id: 'viagens', ico: 'rota', nome: 'Viagens' },
-  { id: 'notas', ico: 'nota', nome: 'Notas fiscais', curto: 'Notas' },
   { id: 'diarias', ico: 'calendario', nome: 'Minhas diárias', curto: 'Diárias' },
   { id: 'receita', ico: 'receita', nome: 'Receita da empresa', curto: 'Receita' },
   { id: 'perfil', ico: 'usuario', nome: 'Perfil' },
@@ -445,11 +483,9 @@ const ABAS_MOTORISTA = [
 const ABAS_ADMIN = [
   { id: 'panorama', ico: 'panorama', nome: 'Panorama' },
   { id: 'lancamentos', ico: 'lista', nome: 'Lançamentos', curto: 'Lançam.' },
-  { id: 'receber', ico: 'aReceber', nome: 'A receber' },
   { id: 'viagens', ico: 'rota', nome: 'Viagens' },
+  { id: 'clientes', ico: 'usuario', nome: 'Clientes' },
   { id: 'diarias', ico: 'calendario', nome: 'Diárias' },
-  { id: 'notas', ico: 'nota', nome: 'Notas fiscais', curto: 'Notas' },
-  { id: 'ajustes', ico: 'ajustes', nome: 'Ajustes' },
 ];
 // No celular cabem 4 abas fixas; as outras ficam no botão "Mais".
 const ABAS_NO_DOCK = 4;
@@ -469,6 +505,7 @@ async function iniciaApp() {
   sincroniza();
   sincronizaPush();
   executaAcaoDaUrl();
+  preparaOffline().catch(()=>{});
 }
 
 function desenhaEstrutura() {
@@ -494,13 +531,13 @@ function desenhaEstrutura() {
             </button>`).join('')}
         </nav>
         <div class="usuario-rodape">
-          <div class="usuario-card">
+          <button type="button" class="usuario-card botao-perfil" id="b-perfil-lateral" aria-label="Perfil e ajustes">
             <div class="avatar-circulo">${iniciais(estado.usuario.nome)}</div>
             <div class="usuario-dados">
               <strong>${esc(estado.usuario.nome)}</strong>
-              <span>${ehAdmin() ? 'Administrador' : 'Motorista'}</span>
+              <span class="perfil-acesso">${svg('ajustes')} Perfil e ajustes ${svg('setaDireita')}</span>
             </div>
-          </div>
+          </button>
           <button type="button" class="btn-sair-lateral" id="b-sair-sidebar" title="Sair da conta">
             ${svg('sair')}
           </button>
@@ -516,18 +553,18 @@ function desenhaEstrutura() {
             </div>
           </div>
           <div class="acoes-topo">
+            ${ehAdmin() ? `<button class="sino perfil-movel" type="button" id="b-perfil" aria-label="Perfil e ajustes" title="Perfil e ajustes">${svg('usuario')}</button>` : ''}
             <button class="sino fila-aparelho oculto" type="button" id="b-fila" aria-label="Guardado no aparelho">
               ${svg('relogio')}<span class="contador" aria-hidden="true"></span>
             </button>
             <button class="sino" type="button" id="b-avisos" aria-label="Notificações e Avisos">
               ${svg('sino')}<span class="contador oculto" aria-hidden="true"></span>
             </button>
-            <button type="button" class="btn principal pequeno oculta-pc" id="b-acao-topo">
-              ${svg('registrar')} <span>${ehAdmin() ? 'Novo Lançamento' : 'Novo Gasto'}</span>
-            </button>
+
           </div>
         </header>
 
+        ${window.AMBIENTE_DEMO ? '<div class="faixa-demonstracao" role="status">Prévia de demonstração · alterações salvas apenas neste ambiente.</div>' : ''}
         <div class="faixa-offline" role="status">
           Sem internet. Mostrando os últimos dados salvos; o que você registrar fica guardado e é enviado quando o sinal voltar.
         </div>
@@ -568,6 +605,8 @@ function desenhaEstrutura() {
     };
   }
 
+  document.getElementById('b-perfil')?.addEventListener('click',()=>abreAba('ajustes'));
+  document.getElementById('b-perfil-lateral').onclick = () => abreAba('ajustes');
   const sino = document.getElementById('b-avisos');
   if (sino) sino.onclick = abreAvisos;
   document.getElementById('b-fila').onclick = abreFila;
@@ -590,17 +629,15 @@ function desenhaEstrutura() {
               ${svg('lista')} Registrar Gasto
             </button>
             <button class="btn principal grande" type="button" id="m-novo-frete" style="background:var(--verde);border-color:var(--verde);">
-              ${svg('registrar')} Registrar Frete
+              ${svg('rota')} Nova viagem
             </button>
           </div>
         </div>`);
       document.getElementById('m-novo-gasto').onclick = () => {
-        fechar();
         abreFormLancamento('saida', null, () => abreAba(estado.aba));
       };
       document.getElementById('m-novo-frete').onclick = () => {
-        fechar();
-        abreFormLancamento('entrada', null, () => abreAba(estado.aba));
+        abreFormViagem(null, () => abreAba(estado.aba));
       };
     } else {
       abreFormLancamento('saida', null, () => abreAba(estado.aba));
@@ -622,6 +659,8 @@ function abasDoDock() {
 }
 
 async function abreAba(id) {
+  estado.observadorGrafico?.disconnect();
+  [...document.querySelectorAll('.janela')].reverse().forEach((j) => j.dispatchEvent(new Event('fechar-janela')));
   estado.aba = id;
   app.querySelectorAll('[data-aba]').forEach((b) => {
     b.setAttribute('aria-current', String(b.dataset.aba === id));
@@ -638,6 +677,7 @@ async function abreAba(id) {
     meus: telaLancamentos,
     lancamentos: telaLancamentos,
     viagens: telaViagens,
+    clientes: telaClientes,
     panorama: telaPanorama,
     receber: telaReceber,
     diarias: telaDiarias,
@@ -648,6 +688,7 @@ async function abreAba(id) {
   };
   try {
     await telas[id](alvo);
+    ajustaPainel(alvo);
   } catch (erro) {
     if (vez !== estado.versaoAba) return;
     alvo.innerHTML = `<div class="aviso erro">${esc(erro.message)}</div>`;
@@ -662,6 +703,7 @@ async function recarregaBasico() {
     carregaViagensAbertas(),
     ehAdmin() ? recarregaRecebiveisAbertos() : null,
   ]);
+  estado.clientes = await api('GET', 'clientes');
   estado.categorias = categorias;
   estado.caminhoes = caminhoes;
   estado.usuarios = usuarios;
@@ -670,14 +712,7 @@ async function recarregaBasico() {
 
 // Viagens abertas no servidor mais as abertas sem internet que ainda estão na fila do aparelho.
 async function carregaViagensAbertas() {
-  const doServidor = await api('GET', 'viagens', { status: 'aberta', limite: 100 });
-  let naFila = [];
-  try {
-    naFila = (await Fila.lista(estado.usuario.id))
-      .filter((e) => e.rota === 'viagens' && !e.erro)
-      .map((e) => ({ id: e.ref, origem: e.corpo.origem, destino: e.corpo.destino, inicio: e.corpo.inicio }));
-  } catch { /* sem IndexedDB */ }
-  return [...doServidor, ...naFila];
+  return api('GET','viagens',{status:'aberta',limite:1000});
 }
 
 // Fretes em aberto, para o proprietário ligar uma entrada ao frete que está sendo pago.
@@ -962,12 +997,18 @@ function resumoDoEnvio(rota, corpo = {}) {
   if (rota === 'diarias') {
     return `Dia trabalhado ${dataCurta(c.de)}${c.ate && c.ate !== c.de ? ` a ${dataCurta(c.ate)}` : ''}`;
   }
+  if (rota === 'diarias-pagar') {
+    const motorista=estado.usuarios.find((u)=>String(u.id)===String(c.usuario_id));
+    return ['Pagamento de diárias',motorista?.nome,c.ids?.length?`${c.ids.length} dia(s)`:c.mes?mesCurto(c.mes):''].filter(Boolean).join(' · ');
+  }
+  const nomes={clientes:'Cadastro de cliente',caminhoes:'Cadastro de caminhão',categorias:'Cadastro de categoria','viagem-pagamento':'Pagamento de viagem','meu-caminhao':'Caminhão padrão',recebiveis:'Cobrança de cliente','recebivel-receber':'Recebimento de cliente'};
+  if(nomes[rota])return [nomes[rota],c.nome||c.placa||''].filter(Boolean).join(' · ');
   return rota;
 }
 
-async function guardaNaFila(id, rota, params, corpo) {
+async function guardaNaFila(id, rota, params, corpo, criadoEm = Date.now()) {
   const envio = await Fila.adiciona({
-    id, usuarioId: estado.usuario.id, rota, params, corpo, resumo: resumoDoEnvio(rota, corpo),
+    id, criadoEm, usuarioId: estado.usuario.id, rota, params, corpo, resumo: resumoDoEnvio(rota, corpo),
   });
   pedeSincronizacao();
   // Com internet (só a foto tinha ficado no aparelho): tenta enviar agora mesmo.
@@ -1120,7 +1161,8 @@ async function saiDaConta() {
   }
   for (const e of pendentes) await Fila.remove(e.id).catch(() => {});
   await Fila.defineMeta('usuario', null).catch(() => {});
-  try { await caches.delete(Fila.CACHE_DADOS); } catch { /* sem Cache Storage */ }
+  await Fila.defineMeta('sessao-offline',null).catch(()=>{});
+  try { await Promise.all((await caches.keys()).filter((k)=>k.startsWith(Fila.CACHE_DADOS)).map((k)=>caches.delete(k))); } catch { /* sem Cache Storage */ }
   navigator.clearAppBadge?.().catch(() => {});
   estado.usuario = null;
   estado.aba = null;
@@ -1320,7 +1362,7 @@ function executaAcaoDaUrl() {
   const acao = p.get('acao');
   if (!acao) return;
   history.replaceState(null, '', location.pathname);
-  const recarrega = () => abreAba(estado.aba);
+  const recarrega = async () => { if (aoConcluir) await aoConcluir(); else if (!document.querySelector('.janela')) await abreAba(estado.aba); };
   if (acao === 'gasto') abreFormLancamento('saida', null, recarrega);
   else if (acao === 'viagem') abreFormViagem(null, recarrega);
   else if (acao === 'nota') formNota(null, recarrega);
@@ -1337,11 +1379,9 @@ function escolheDestinoDoArquivo(ref, recarrega) {
       <button class="btn grande" type="button" data-gasto>${icone('gasto')} Comprovante de gasto</button>
     </div>`);
   elemento.querySelector('[data-nota]').onclick = () => {
-    fechar();
     formNota(null, recarrega, { arquivo: ref });
   };
   elemento.querySelector('[data-gasto]').onclick = () => {
-    fechar();
     abreFormLancamento('saida', null, recarrega, { comprovante: ref });
   };
 }
@@ -1349,8 +1389,8 @@ function escolheDestinoDoArquivo(ref, recarrega) {
 const PAGAMENTOS = ['Dinheiro', 'Cartão da empresa', 'Pix', 'Cartão frete', 'Boleto', 'Do próprio bolso'];
 
 function comOExtra(lista, extra) {
-  if (extra?.id && !lista.some((x) => Number(x.id) === Number(extra.id))) {
-    return [...lista, { ...extra, id: Number(extra.id) }];
+  if (extra?.id && !lista.some((x) => String(x.id) === String(extra.id))) {
+    return [...lista, { ...extra, id: extra.id }];
   }
   return lista;
 }
@@ -1359,8 +1399,8 @@ function opcoesCaminhao(selecionado, extra) {
   return [
     '<option value="">Selecione o caminhão</option>',
     ...comOExtra(estado.caminhoes, extra).map((c) => `
-      <option value="${c.id}" ${Number(selecionado) === Number(c.id) ? 'selected' : ''}>
-        ${esc(c.placa)}${c.apelido ? ` - ${esc(c.apelido)}` : ''}
+      <option value="${c.id}" ${String(selecionado) === String(c.id) ? 'selected' : ''}>
+        ${esc(c.placa)}${c.apelido ? ` · ${esc(c.apelido)}` : ''}
       </option>`),
   ].join('');
 }
@@ -1370,7 +1410,7 @@ function opcoesViagem(selecionado, extra) {
     '<option value="">Fora de viagem</option>',
     ...comOExtra(estado.viagensAbertas, extra).map((v) => `
       <option value="${esc(v.id)}" ${String(selecionado) === String(v.id) ? 'selected' : ''}>
-        ${Fila.ehLocal(v.id) ? '⏳ ' : ''}${esc(v.origem)} → ${esc(v.destino)}${v.inicio ? ` (saída ${dataDiaMes(v.inicio)})` : ''}
+        ${Fila.ehLocal(v.id) ? '⏳ ' : ''}${esc(localViagem(v.origem))} → ${esc(localViagem(v.destino))}${v.inicio ? ` (saída ${dataDiaMes(v.inicio)})` : ''}
       </option>`),
   ].join('');
 }
@@ -1385,7 +1425,7 @@ function opcoesMotorista(selecionado) {
 function opcoesRecebivel(selecionado, extra) {
   return comOExtra(estado.recebiveisAbertos, extra).map((r) => `
     <option value="${r.id}" ${Number(selecionado) === Number(r.id) ? 'selected' : ''}>
-      ${esc(r.cliente)}${r.descricao ? ` - ${esc(r.descricao)}` : ''}${r.restante_centavos != null
+      ${esc(r.cliente)}${r.descricao ? ` · ${esc(r.descricao)}` : ''}${r.restante_centavos != null
         ? ` (falta ${dinheiro(r.restante_centavos)})` : ''}
     </option>`).join('');
 }
@@ -1407,13 +1447,7 @@ function camposLancamento(tipo, l = {}) {
   } : null);
 
   return `
-    ${ehAdmin() ? `
-      <div class="campo">
-        <label for="c-motorista">${entrada ? 'Lançado por' : 'Motorista'}</label>
-        <select id="c-motorista" name="usuario_id">
-          ${opcoesMotorista(l.usuario_id || estado.usuario.id)}
-        </select>
-      </div>` : ''}
+    <input type="hidden" name="usuario_id" value="${esc(l.usuario_id || estado.usuario.id)}">
 
     <div class="linha duas">
       <div class="campo">
@@ -1423,7 +1457,7 @@ function camposLancamento(tipo, l = {}) {
       <div class="campo">
         <label for="c-caminhao">Caminhão</label>
         <select id="c-caminhao" name="caminhao_id">
-          ${opcoesCaminhao(l.caminhao_id || (l.id ? null : (ehAdmin() ? (estado.usuarios.find((u) => Number(u.id) === Number(l.usuario_id || estado.usuario.id))?.caminhao_padrao_id || estado.usuario.caminhao_padrao_id) : estado.usuario.caminhao_padrao_id)), l.placa
+          ${opcoesCaminhao(l.caminhao_id || (l.id ? null : (ehAdmin() ? (estado.usuarios.find((u) => String(u.id) === String(l.usuario_id || estado.usuario.id))?.caminhao_padrao_id || estado.usuario.caminhao_padrao_id) : estado.usuario.caminhao_padrao_id)), l.placa
             ? { id: l.caminhao_id, placa: l.placa, apelido: l.caminhao_apelido } : null)}
         </select>
       </div>
@@ -1444,11 +1478,11 @@ function camposLancamento(tipo, l = {}) {
         <div class="linha duas">
           <div class="campo">
             <label for="nv-origem">Saindo de</label>
-            <input id="nv-origem" maxlength="80" placeholder="Cidade de saída">
+            <input id="nv-origem" maxlength="80" placeholder="Local de saída">
           </div>
           <div class="campo">
             <label for="nv-destino">Indo para</label>
-            <input id="nv-destino" maxlength="80" placeholder="Cidade de destino">
+            <input id="nv-destino" maxlength="80" placeholder="Local de destino">
           </div>
         </div>
         <div class="linha duas">
@@ -1470,13 +1504,13 @@ function camposLancamento(tipo, l = {}) {
     </div>
 
     <div class="campo">
-      <label>${entrada ? 'Tipo de frete' : 'Tipo de gasto'}</label>
-      <p class="dica">Toque na opção.</p>
+      <label>${entrada ? 'Categoria da entrada' : 'Categoria do gasto'}</label>
+      <p class="dica">Selecione a categoria que melhor descreve o lançamento.</p>
       <div class="categorias" role="group">
         ${lista.map((c) => `
           <button type="button" class="opcao-categoria" data-id="${c.id}"
-                  data-litros="${c.pede_litros}" data-descricao="${c.pede_descricao}"
-                  aria-pressed="${Number(l.categoria_id) === Number(c.id)}">
+                  data-litros="${Number(c.pede_litros)||0}" data-descricao="${Number(c.pede_descricao)||0}"
+                  aria-pressed="${String(l.categoria_id) === String(c.id)}">
             ${esc(c.nome)}
           </button>`).join('')}
       </div>
@@ -1589,7 +1623,39 @@ async function reduzFoto(arquivo) {
   }
 }
 
+function organizaFormularioLancamento(form) {
+  if (form.querySelector('.registro-principal')) return;
+  form.classList.add('form-lancamento-organizado','registro-simples');
+  const antes=[...form.children].find((el)=>el.matches('.acoes.fim')) || null;
+  const principal=document.createElement('div');principal.className='registro-principal';
+  const mover=(seletor,destino)=>{const campo=form.querySelector(seletor);if(!campo)return;const item=campo.matches('[data-se]')?campo:campo.closest('.linha.duas')||campo.closest('.campo');if(item)destino.append(item);};
+  ['#c-valor','.categorias','[data-se="descricao"]','[data-se="litros"]','[data-se="preco-litro"]','#c-data','#c-viagem'].forEach((seletor)=>mover(seletor,principal));
+  form.insertBefore(principal,antes);
+  const lista=form.querySelector('.categorias');
+  if(lista){
+    const select=document.createElement('select');select.id='c-categoria-simples';select.required=true;select.setAttribute('aria-label','Categoria');
+    select.add(new Option('Selecione uma categoria',''));
+    lista.querySelectorAll('button').forEach((b)=>select.add(new Option(b.textContent.trim(),b.dataset.id,false,b.getAttribute('aria-pressed')==='true')));
+    lista.before(select);lista.classList.add('oculto');
+    const label=lista.closest('.campo').querySelector('label');label.htmlFor=select.id;label.textContent='Categoria';
+    select.onchange=()=>{const botao=[...lista.querySelectorAll('button')].find((b)=>b.dataset.id===select.value);if(botao)botao.click();else {form.elements.categoria_id.value='';lista.querySelectorAll('button').forEach((b)=>b.setAttribute('aria-pressed','false'));['litros','descricao','preco-litro'].forEach((chave)=>form.querySelector('[data-se="'+chave+'"]')?.classList.add('oculto'));}};
+  }
+  const extras=document.createElement('details');extras.className='registro-extras';
+  const preenchido=['cliente','recebivel_id','lugar','pagamento','observacao','comprovante'].some((nome)=>form.elements[nome]?.value);
+  extras.open=preenchido;
+  extras.innerHTML='<summary>Adicionar detalhes ou comprovante <small>Opcional</small></summary><div class="registro-extras-corpo"></div>';
+  const corpo=extras.querySelector('div');
+  ['#c-cliente','#c-recebivel','#c-lugar','#c-observacao','#c-foto'].forEach((seletor)=>mover(seletor,corpo));
+  form.insertBefore(extras,antes);
+  form.querySelectorAll('.dica').forEach((d)=>{if(!d.closest('[data-se="nova-viagem"]'))d.hidden=true;});
+  const viagem=form.querySelector('#c-viagem');if(viagem)viagem.closest('.campo').querySelector('label').textContent='Vincular a uma viagem';
+  const cliente=form.querySelector('label[for="c-cliente"]');if(cliente)cliente.textContent='Cliente (entrada avulsa)';
+  const pendente=form.querySelector('label[for="c-recebivel"]');if(pendente)pendente.textContent='Abater cobrança anterior';
+  const novo=form.querySelector('[data-nova-viagem]');if(novo)novo.textContent='+ Nova viagem';
+}
+
 function ligaCamposLancamento(form) {
+  organizaFormularioLancamento(form);
   const campoCategoria = form.elements.categoria_id;
   const blocoLitros = form.querySelector('[data-se="litros"]');
   const blocoDescricao = form.querySelector('[data-se="descricao"]');
@@ -1614,6 +1680,7 @@ function ligaCamposLancamento(form) {
       b.setAttribute('aria-pressed', String(b === botao));
     });
     campoCategoria.value = botao.dataset.id;
+    const seletor=form.querySelector('#c-categoria-simples');if(seletor)seletor.value=botao.dataset.id;
     blocoLitros.classList.toggle('oculto', botao.dataset.litros !== '1');
     blocoDescricao.classList.toggle('oculto', botao.dataset.descricao !== '1');
     form.elements.descricao.required = botao.dataset.descricao === '1';
@@ -1662,7 +1729,7 @@ function ligaCamposLancamento(form) {
 
   // Ao escolher o frete a receber, já preenche quem pagou e o tipo de frete.
   form.elements.recebivel_id?.addEventListener('change', () => {
-    const r = estado.recebiveisAbertos.find((x) => Number(x.id) === Number(form.elements.recebivel_id.value));
+    const r = estado.recebiveisAbertos.find((x) => String(x.id) === String(form.elements.recebivel_id.value));
     if (!r) return;
     if (form.elements.cliente && !form.elements.cliente.value) form.elements.cliente.value = r.cliente;
     const botao = form.querySelector(`.opcao-categoria[data-id="${r.categoria_id}"]`);
@@ -1755,23 +1822,23 @@ function abreFormLancamento(tipoInicial, lancamento, aoConcluir, base = {}) {
     return `
       ${ehAdmin() && ehNovo ? `
         <div class="seletor-tipo-lancamento" role="group" aria-label="Tipo de Lançamento">
-          <button type="button" class="btn-tipo-toggle ${tipoAtual === 'saida' ? 'ativo-saida' : ''}" data-tipo-opcao="saida">
-            ${icone('gasto')} Gasto (Saída)
+          <button type="button" class="btn-tipo-toggle ${tipoAtual === 'saida' ? 'ativo-saida' : ''}" data-tipo-opcao="saida" aria-pressed="${tipoAtual === 'saida'}">
+            ${icone('gasto')} Gasto
           </button>
-          <button type="button" class="btn-tipo-toggle ${tipoAtual === 'entrada' ? 'ativo-entrada' : ''}" data-tipo-opcao="entrada">
-            ${icone('receber')} Frete (Entrada)
+          <button type="button" class="btn-tipo-toggle ${tipoAtual === 'entrada' ? 'ativo-entrada' : ''}" data-tipo-opcao="entrada" aria-pressed="${tipoAtual === 'entrada'}">
+            ${icone('receber')} Entrada
           </button>
         </div>` : ''}
       ${camposLancamento(tipoAtual, lancamento || base)}
       <div class="acoes fim" style="margin-top:16px">
         <button class="btn" type="button" data-cancelar>Cancelar</button>
-        <button class="btn principal" type="submit">${lancamento ? 'Salvar alterações' : 'Salvar lançamento'}</button>
+        <button class="btn principal" type="submit">${lancamento ? 'Salvar alterações' : tipoAtual === 'entrada' ? 'Salvar entrada' : 'Salvar gasto'}</button>
       </div>`;
   }
 
   const titulo = lancamento
     ? (tipoAtual === 'entrada' ? 'Editar Entrada (Frete)' : 'Editar Gasto')
-    : (tipoAtual === 'entrada' ? 'Novo Frete / Entrada' : 'Novo Gasto / Despesa');
+    : (tipoAtual === 'entrada' ? 'Registrar entrada' : 'Registrar gasto');
 
   const { elemento, fechar } = janela(titulo, `
     <form novalidate id="form-registro-lancamento">
@@ -1789,10 +1856,15 @@ function abreFormLancamento(tipoInicial, lancamento, aoConcluir, base = {}) {
         btn.onclick = () => {
           const novoTipo = btn.dataset.tipoOpcao;
           if (novoTipo === tipoAtual) return;
+          const valoresAtuais = Object.fromEntries(new FormData(form));
           tipoAtual = novoTipo;
           const h2 = elemento.closest('.conteudo')?.querySelector('h2');
-          if (h2) h2.textContent = tipoAtual === 'entrada' ? 'Novo Frete / Entrada' : 'Novo Gasto / Despesa';
+          if (h2) { h2.textContent = tipoAtual === 'entrada' ? 'Registrar entrada' : 'Registrar gasto'; h2.closest('[role="dialog"]')?.setAttribute('aria-label',h2.textContent); }
+          form.classList.remove('registro-simples');
           form.innerHTML = renderConteudo();
+          for(const nome of ['usuario_id','data','caminhao_id','viagem_id','valor','lugar','pagamento','observacao','comprovante']) {
+            if(form.elements[nome] && valoresAtuais[nome]!=null)form.elements[nome].value=valoresAtuais[nome];
+          }
           ligaEventosForm();
         };
       });
@@ -1881,7 +1953,7 @@ function itemLancamento(l, somenteLeitura = false) {
   const dataFormatada = dataCurta(l.data);
   const placa = l.placa ? `<span class="badge-placa">${esc(l.placa)}</span>` : '';
   const motorista = ehAdmin() && l.motorista ? `<span>${esc(l.motorista)}</span>` : '';
-  const rota = l.viagem_origem ? `<span>${esc(l.viagem_origem)} → ${esc(l.viagem_destino)}</span>` : '';
+  const rota = l.viagem_origem ? `<span>${esc(localViagem(l.viagem_origem))} → ${esc(localViagem(l.viagem_destino))}</span>` : '';
   const litros = l.litros ? `<span>${numero(l.litros)} L</span>` : '';
   const precoLitro = l.litros && l.valor_centavos ? `<span>${dinheiro(l.valor_centavos / l.litros)}/L</span>` : '';
   const cliente = l.cliente ? `<span>${esc(l.cliente)}</span>` : '';
@@ -1910,17 +1982,18 @@ function itemLancamento(l, somenteLeitura = false) {
           ${entrada ? '+' : '−'}&nbsp;${dinheiro(l.valor_centavos)}
         </span>
         ${somenteLeitura ? '' : `<span class="seta-acao">${icone('setaDireita')}</span>`}
+        ${seloCadastro(l)}
       </div>
     </div>`;
 }
 
 function ligaItens(raiz) {
   raiz.querySelectorAll('[data-lancamento]').forEach((b) => {
-    b.onclick = () => abreLancamento(Number(b.dataset.lancamento));
+    b.onclick = () => abreLancamento(b.dataset.lancamento);
     b.onkeydown = (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        abreLancamento(Number(b.dataset.lancamento));
+        abreLancamento(b.dataset.lancamento);
       }
     };
   });
@@ -1972,7 +2045,7 @@ async function telaLancamentos(alvo) {
         <div class="barra-lancamentos-controles">
           <div class="busca-com-icone" style="flex:1;position:relative">
             <span class="lupa-icone">${icone('busca')}</span>
-            <input id="f-busca" type="search" placeholder="Buscar por descrição, motorista, placa ou cliente..."
+            <input id="f-busca" type="search" aria-label="Buscar lançamentos" list="lancamentos-keywords" placeholder="Palavras-chave: gasto, cliente, motorista ou placa"
                    value="${esc(estado.filtros.busca || '')}" style="padding-left:38px;width:100%">
           </div>
           <button class="btn-filtro-unico" type="button" id="b-abrir-filtros" title="Filtros avançados" aria-haspopup="dialog">
@@ -1989,6 +2062,8 @@ async function telaLancamentos(alvo) {
       <div id="lista"><p class="carregando">Carregando lançamentos…</p></div>
     </div>`;
 
+  alvo.insertAdjacentHTML('beforeend',sugestoesBusca('lancamentos-keywords',[...estado.categorias.map((c)=>c.nome),...estado.usuarios.map((u)=>u.nome),...estado.caminhoes.map((c)=>c.placa),...estado.clientes.map((c)=>c.nome)]));
+  let versaoConsulta=0;
   function atualizaBadgeFiltros() {
     const cont = totalFiltrosAtivos();
     const badge = alvo.querySelector('#cont-filtros-ativos');
@@ -2007,15 +2082,15 @@ async function telaLancamentos(alvo) {
         itensChips.push(`<span class="chip-filtro">Tipo: ${estado.filtros.tipo === 'entrada' ? 'Entradas' : 'Saídas'} <button type="button" data-limpar-chip="tipo">×</button></span>`);
       }
       if (estado.filtros.categoria_id) {
-        const cat = estado.categorias.find((c) => Number(c.id) === Number(estado.filtros.categoria_id));
+        const cat = estado.categorias.find((c) => String(c.id) === String(estado.filtros.categoria_id));
         if (cat) itensChips.push(`<span class="chip-filtro">Cat: ${esc(cat.nome)} <button type="button" data-limpar-chip="categoria_id">×</button></span>`);
       }
       if (estado.filtros.caminhao_id) {
-        const cam = estado.caminhoes.find((c) => Number(c.id) === Number(estado.filtros.caminhao_id));
+        const cam = estado.caminhoes.find((c) => String(c.id) === String(estado.filtros.caminhao_id));
         if (cam) itensChips.push(`<span class="chip-filtro">Caminhão: ${esc(cam.placa)} <button type="button" data-limpar-chip="caminhao_id">×</button></span>`);
       }
       if (estado.filtros.usuario_id) {
-        const usr = estado.usuarios.find((u) => Number(u.id) === Number(estado.filtros.usuario_id));
+        const usr = estado.usuarios.find((u) => String(u.id) === String(estado.filtros.usuario_id));
         if (usr) itensChips.push(`<span class="chip-filtro">Motorista: ${esc(usr.nome)} <button type="button" data-limpar-chip="usuario_id">×</button></span>`);
       }
 
@@ -2052,6 +2127,7 @@ async function telaLancamentos(alvo) {
   }
 
   const atualiza = async () => {
+    const versaoAtual=++versaoConsulta;
     atualizaBadgeFiltros();
     const caixaLista = document.getElementById('lista');
     const caixaKpis = document.getElementById('resumo-kpis');
@@ -2061,6 +2137,7 @@ async function telaLancamentos(alvo) {
     if (rotuloMes) rotuloMes.textContent = mesLongo(estado.mes);
 
     const r = await api('GET', 'lancamentos', filtrosAtuais());
+    if(versaoAtual!==versaoConsulta || !alvo.isConnected)return;
     itensCarregados = r.itens || [];
     const pdfLink = document.getElementById('b-pdf');
     if (pdfLink) pdfLink.href = endereco('pdf', filtrosAtuais());
@@ -2128,13 +2205,13 @@ async function telaLancamentos(alvo) {
     clearTimeout(debounceBusca);
     debounceBusca = setTimeout(() => {
       estado.filtros.busca = e.target.value.trim();
-      atualiza();
+      atualiza().catch((erro)=>recado(erro.message));
     }, 250);
   };
 
   // Single filter dialog opened by the filter button
   alvo.querySelector('#b-abrir-filtros').onclick = () => {
-    let tipoTemp = estado.filtros.tipo || '';
+    let tipoTemp = admin ? estado.filtros.tipo || '' : '';
 
     const { elemento, fechar } = janela('Filtros de Lançamentos', `
       <div class="pilha">
@@ -2144,8 +2221,8 @@ async function telaLancamentos(alvo) {
         </div>
 
         <div class="campo">
-          <label>Tipo de lançamento</label>
-          <div class="seletor-tipo-lancamento" role="group" aria-label="Filtrar por tipo" style="margin-bottom:0">
+          <label ${admin?'':'hidden'}>Tipo de lançamento</label>
+          <div class="seletor-tipo-lancamento" role="group" aria-label="Filtrar por tipo" style="margin-bottom:0;${admin?'':'display:none'}">
             <button type="button" class="btn-tipo-toggle ${!tipoTemp ? 'ativo-saida' : ''}" data-dlg-tipo="">
               Todos
             </button>
@@ -2202,6 +2279,8 @@ async function telaLancamentos(alvo) {
     elemento.querySelectorAll('[data-dlg-tipo]').forEach((btn) => {
       btn.onclick = () => {
         tipoTemp = btn.dataset.dlgTipo;
+        const categoria=estado.categorias.find((c)=>String(c.id)===String(elemento.querySelector('#dlg-f-categoria').value));
+        if(tipoTemp && categoria && categoria.tipo!==tipoTemp)elemento.querySelector('#dlg-f-categoria').value='';
         elemento.querySelectorAll('[data-dlg-tipo]').forEach((b) => {
           b.className = `btn-tipo-toggle ${b.dataset.dlgTipo === tipoTemp ? (tipoTemp === 'entrada' ? 'ativo-entrada' : 'ativo-saida') : ''}`;
         });
@@ -2238,7 +2317,7 @@ async function telaLancamentos(alvo) {
   await atualiza();
 }
 
-async function abreLancamento(id) {
+async function abreLancamento(id, aoConcluir) {
   const l = await api('GET', 'lancamento', { id });
   const entrada = l.tipo === 'entrada';
   const linhas = [
@@ -2246,14 +2325,14 @@ async function abreLancamento(id) {
     [entrada ? 'Valor recebido' : 'Valor pago', dinheiro(l.valor_centavos)],
     ['Dia', dataCurta(l.data)],
     [entrada ? 'Lançado por' : 'Motorista', l.motorista],
-    ['Caminhão', l.placa ? `${l.placa}${l.caminhao_apelido ? ` - ${l.caminhao_apelido}` : ''}` : '-'],
+    ['Caminhão', l.placa ? `${l.placa}${l.caminhao_apelido ? ` · ${l.caminhao_apelido}` : ''}` : '-'],
     ['Viagem', l.viagem_origem ? `${l.viagem_origem} → ${l.viagem_destino}` : 'Fora de viagem'],
     ['Litros', l.litros ? `${numero(l.litros)} L` : null],
     ['Preço por litro', l.litros ? dinheiro(l.valor_centavos / l.litros) : null],
     ['Km do painel', l.km ? numero(l.km) : null],
     ['Quem pagou', l.cliente],
     ['Frete a receber', l.recebivel_cliente
-      ? `${l.recebivel_cliente}${l.recebivel_descricao ? ` - ${l.recebivel_descricao}` : ''}` : null],
+      ? `${l.recebivel_cliente}${l.recebivel_descricao ? ` · ${l.recebivel_descricao}` : ''}` : null],
     [entrada ? 'Cidade / local' : 'Onde foi', l.lugar],
     [entrada ? 'Como recebeu' : 'Como pagou', l.pagamento],
     ['Observação', l.observacao],
@@ -2276,16 +2355,15 @@ async function abreLancamento(id) {
         </p>` : ''}
     </div>
     ${avisoPrazo(l)}
-    ${l.pode_alterar ? `
+    ${(ehAdmin() || l.pode_alterar) && !l.offline ? `
       <div class="acoes fim" style="margin-top:16px">
         <button class="btn perigo" type="button" data-excluir>Excluir</button>
         <button class="btn principal" type="button" data-editar>Editar</button>
       </div>` : ''}`);
 
   vigiaPrazo(elemento, l);
-  const recarrega = () => abreAba(estado.aba);
+  const recarrega = async () => { if (aoConcluir) await aoConcluir(); else if (!document.querySelector('.janela')) await abreAba(estado.aba); };
   elemento.querySelector('[data-editar]')?.addEventListener('click', () => {
-    fechar();
     abreFormLancamento(l.tipo, l, recarrega);
   });
   elemento.querySelector('[data-excluir]')?.addEventListener('click', async () => {
@@ -2306,312 +2384,6 @@ async function abreLancamento(id) {
   });
 }
 
-async function telaViagens(alvo) {
-  alvo.innerHTML = `
-    <div class="pilha">
-      <div class="titulo-secao">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
-          <div>
-            <h1>Controle de Viagens</h1>
-            <p>Gerenciamento completo das rotas, quilometragem, fretes e custos operacionais.</p>
-          </div>
-          <button class="btn principal" type="button" id="b-nova">${icone('adicionar')} Nova Viagem</button>
-        </div>
-      </div>
-      <div id="lista-viagens"><p class="carregando">Carregando viagens…</p></div>
-    </div>`;
-
-  const atualiza = async () => {
-    estado.viagensAbertas = await api('GET', 'viagens', { status: 'aberta', limite: 100 });
-    const caixa = document.getElementById('lista-viagens');
-    const viagens = await api('GET', 'viagens', { limite: 300 });
-    if (!viagens.length) {
-      caixa.innerHTML = `
-        <div class="vazio">
-          ${icone('caminhao')}
-          <p style="margin-top:8px">Nenhuma viagem registrada ainda. Abra a primeira viagem para monitorar a rota!</p>
-        </div>`;
-      return;
-    }
-
-    caixa.innerHTML = `
-      <div class="lista-viagens">
-        ${viagens.map((v) => {
-          const saldo = Number(v.entradas_centavos) - Number(v.saidas_centavos);
-          const aberta = v.status === 'aberta';
-          const km = v.km_final != null && v.km_inicial != null ? v.km_final - v.km_inicial : null;
-          return `
-          <div class="card-viagem ${aberta ? 'aberta' : ''}" data-viagem="${v.id}" role="button" tabindex="0">
-            <div class="cabecalho-viagem">
-              <div class="rota-viagem">
-                <span class="ponto">${esc(v.origem)}</span>
-                <span class="seta-rota">→</span>
-                <span class="ponto">${esc(v.destino)}</span>
-              </div>
-              <span class="badge-status ${aberta ? 'aberta' : 'encerrada'}">
-                ${aberta ? 'Em andamento' : 'Encerrada'}
-              </span>
-            </div>
-
-            <div class="meta-viagem">
-              <span>${dataCurta(v.inicio)}${v.fim ? ` até ${dataCurta(v.fim)}` : ''}</span>
-              ${v.placa ? `<span class="separador-ponto">·</span><span class="badge-placa">${esc(v.placa)}</span>` : ''}
-              ${ehAdmin() && v.motorista ? `<span class="separador-ponto">·</span><span>${esc(v.motorista)}</span>` : ''}
-              ${km != null ? `<span class="separador-ponto">·</span><span>${numero(km)} km rodados</span>` : ''}
-              ${seloPrazo(v)}
-            </div>
-
-            <div class="metricas-viagem">
-              <div class="coluna-metrica">
-                <div class="rotulo">Despesas</div>
-                <div class="valor saida">${dinheiro(v.saidas_centavos)}</div>
-              </div>
-              ${ehAdmin() ? `
-              <div class="coluna-metrica">
-                <div class="rotulo">Frete Recebido</div>
-                <div class="valor entrada">${dinheiro(v.entradas_centavos)}</div>
-              </div>
-              <div class="coluna-metrica">
-                <div class="rotulo">Resultado</div>
-                <div class="valor ${saldo >= 0 ? 'entrada' : 'saida'}">
-                  ${saldo >= 0 ? '+' : '−'}${dinheiro(Math.abs(saldo))}
-                </div>
-              </div>` : `
-              <div class="coluna-metrica">
-                <div class="rotulo">Lançamentos</div>
-                <div class="valor" style="color:var(--tinta-2)">${v.qtd_lancamentos || 0}</div>
-              </div>`}
-            </div>
-          </div>`;
-        }).join('')}
-      </div>`;
-
-    caixa.querySelectorAll('[data-viagem]').forEach((b) => {
-      const v = viagens.find((x) => Number(x.id) === Number(b.dataset.viagem));
-      b.onclick = () => abreViagem(v, atualiza);
-      b.onkeydown = (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          abreViagem(v, atualiza);
-        }
-      };
-    });
-  };
-
-  alvo.querySelector('#b-nova').onclick = () => abreFormViagem(null, atualiza);
-  await atualiza();
-}
-
-function camposViagem(v = {}) {
-  return `
-    ${ehAdmin() ? `
-      <div class="campo">
-        <label for="v-motorista">Motorista</label>
-        <select id="v-motorista" name="usuario_id">
-          ${opcoesMotorista(v.usuario_id || estado.usuario.id)}
-        </select>
-      </div>` : ''}
-    <div class="linha duas">
-      <div class="campo">
-        <label for="v-origem">Saindo de</label>
-        <input id="v-origem" name="origem" required maxlength="80" placeholder="Cidade de saída"
-               value="${esc(v.origem || '')}">
-      </div>
-      <div class="campo">
-        <label for="v-destino">Indo para</label>
-        <input id="v-destino" name="destino" required maxlength="80" placeholder="Cidade de destino"
-               value="${esc(v.destino || '')}">
-      </div>
-    </div>
-    <div class="linha duas" style="margin-top:16px">
-      <div class="campo">
-        <label for="v-inicio">Dia da saída</label>
-        <input id="v-inicio" name="inicio" type="date" required value="${esc(v.inicio || hoje())}">
-      </div>
-      <div class="campo">
-        <label for="v-caminhao">Caminhão</label>
-        <select id="v-caminhao" name="caminhao_id">
-          ${opcoesCaminhao(v.caminhao_id, v.placa
-            ? { id: v.caminhao_id, placa: v.placa, apelido: v.caminhao_apelido } : null)}
-        </select>
-      </div>
-    </div>
-    <div class="campo opcional" style="margin-top:16px">
-      <label for="v-km">Km do painel na saída</label>
-      <input id="v-km" name="km_inicial" inputmode="numeric" value="${esc(v.km_inicial ?? '')}">
-    </div>
-    <div class="campo opcional">
-      <label for="v-obs">Observação</label>
-      <input id="v-obs" name="observacao" maxlength="500" value="${esc(v.observacao || '')}">
-    </div>`;
-}
-
-function abreFormViagem(viagem, aoConcluir) {
-  const { elemento, fechar } = janela(viagem ? 'Editar viagem' : 'Nova viagem', `
-    <form novalidate>
-      ${camposViagem(viagem || {})}
-      ${viagem ? `
-        <div class="linha duas">
-          <div class="campo opcional">
-            <label for="v-fim">Dia da chegada</label>
-            <input id="v-fim" name="fim" type="date" value="${esc(viagem.fim || '')}">
-          </div>
-          <div class="campo opcional">
-            <label for="v-kmf">Km na chegada</label>
-            <input id="v-kmf" name="km_final" inputmode="numeric" value="${esc(viagem.km_final ?? '')}">
-          </div>
-        </div>
-        <div class="campo">
-          <label for="v-status">Situação</label>
-          <select id="v-status" name="status">
-            <option value="aberta" ${viagem.status === 'aberta' ? 'selected' : ''}>Em andamento</option>
-            <option value="encerrada" ${viagem.status === 'encerrada' ? 'selected' : ''}>Encerrada</option>
-          </select>
-        </div>` : ''}
-      <div class="acoes fim">
-        <button class="btn" type="button" data-cancelar>Cancelar</button>
-        <button class="btn principal" type="submit">${viagem ? 'Salvar alterações' : 'Abrir viagem'}</button>
-      </div>
-    </form>`);
-  const form = elemento.querySelector('form');
-  form.querySelector('[data-cancelar]').onclick = fechar;
-  aoEnviar(form, async (dados) => {
-    if (!dados.origem?.trim() || !dados.destino?.trim()) {
-      throw new Error('Informe de onde está saindo e para onde vai.');
-    }
-    const r = viagem
-      ? await api('PUT', 'viagem', { id: viagem.id }, dados)
-      : await api('POST', 'viagens', {}, dados);
-    fechar();
-    if (r?.offline) recado(GUARDADO_OFFLINE);
-    else recado(viagem ? 'Viagem atualizada.' : 'Viagem aberta.');
-    estado.viagensAbertas = await carregaViagensAbertas().catch(() => estado.viagensAbertas);
-    await aoConcluir?.();
-  });
-}
-
-async function abreViagem(v, aoConcluir) {
-  const r = await api('GET', 'lancamentos', { viagem_id: v.id, limite: 300 });
-  const km = v.km_final != null && v.km_inicial != null ? v.km_final - v.km_inicial : null;
-  const saldo = Number(v.entradas_centavos) - Number(v.saidas_centavos);
-
-  const { elemento, fechar } = janela(`${v.origem} → ${v.destino}`, `
-    <div class="cartao">
-      <p style="margin:0 0 12px">
-        <span class="etiqueta ${v.status === 'aberta' ? 'aberta' : ''}">
-          ${v.status === 'aberta' ? 'Em andamento' : 'Encerrada'}
-        </span>
-      </p>
-      <div class="grade">
-        <div class="mini">
-          <div class="rotulo">Gastos da viagem</div>
-          <div class="numero saida">${dinheiro(v.saidas_centavos)}</div>
-          <small>${v.qtd_lancamentos} ${Number(v.qtd_lancamentos) === 1 ? 'lançamento' : 'lançamentos'}</small>
-        </div>
-        ${ehAdmin() ? `
-          <div class="mini">
-            <div class="rotulo">Frete recebido</div>
-            <div class="numero entrada">${dinheiro(v.entradas_centavos)}</div>
-          </div>
-          <div class="mini">
-            <div class="rotulo">Saldo da viagem</div>
-            <div class="numero ${saldo >= 0 ? 'entrada' : 'saida'}">
-              ${saldo >= 0 ? '' : '−'}${dinheiro(Math.abs(saldo))}
-            </div>
-          </div>` : ''}
-        <div class="mini">
-          <div class="rotulo">Período</div>
-          <div class="numero" style="font-size:1rem">
-            ${dataCurta(v.inicio)}${v.fim ? `<br>até ${dataCurta(v.fim)}` : ''}
-          </div>
-        </div>
-        ${km != null ? `
-          <div class="mini">
-            <div class="rotulo">Km rodados</div>
-            <div class="numero">${numero(km)}</div>
-          </div>` : ''}
-      </div>
-      <p style="color:var(--tinta-3);font-size:.9rem;margin:12px 0 0">
-        ${v.placa ? `Caminhão ${esc(v.placa)}` : 'Sem caminhão informado'}
-        ${ehAdmin() ? ` • Motorista ${esc(v.motorista)}` : ''}
-        ${v.observacao ? `<br>${esc(v.observacao)}` : ''}
-      </p>
-    </div>
-    ${r.qtd ? `
-      <div class="cartao" style="margin-top:14px">
-        <h2>Lançamentos desta viagem</h2>
-        <div class="lista">${r.itens.map((l) => itemLancamento(l)).join('')}</div>
-      </div>` : `
-      <div class="vazio" style="margin-top:14px">Nenhum lançamento nesta viagem ainda.</div>`}
-    ${ehAdmin() ? '' : avisoPrazo(v)}
-    <div class="acoes fim" style="margin-top:16px">
-      ${ehAdmin() ? '<button class="btn perigo" type="button" data-excluir>Excluir</button>' : ''}
-      ${ehAdmin() ? `
-        <button class="btn" type="button" data-diarias-viagem title="Uma diária por dia da viagem para o motorista">
-          ${icone('calendario')} Lançar diárias
-        </button>` : ''}
-      ${v.pode_alterar ? '<button class="btn" type="button" data-editar>Editar</button>' : ''}
-      ${v.status === 'aberta' ? `
-        <button class="btn principal" type="button" data-encerrar>Encerrar viagem</button>` : ''}
-    </div>`);
-
-  ligaItens(elemento);
-  vigiaPrazo(elemento, v);
-  elemento.querySelector('[data-editar]')?.addEventListener('click', () => {
-    fechar();
-    abreFormViagem(v, aoConcluir);
-  });
-  elemento.querySelector('[data-diarias-viagem]')?.addEventListener('click', async () => {
-    const ate = v.fim || hoje();
-    if (!confirm(`Lançar uma diária para ${v.motorista} em cada dia de ${dataCurta(v.inicio)} a ${dataCurta(ate)}?\n`
-      + 'Dias que já têm diária são pulados. O valor é a diária cadastrada para o motorista.')) return;
-    try {
-      const r2 = await api('POST', 'diarias', {}, {
-        usuario_id: v.usuario_id, de: v.inicio, ate, viagem_id: v.id,
-      });
-      if (r2.offline) { recado(GUARDADO_OFFLINE); return; }
-      recado(r2.criadas
-        ? `${r2.criadas} ${r2.criadas === 1 ? 'diária lançada' : 'diárias lançadas'}${r2.ja_existiam ? ` (${r2.ja_existiam} já existiam)` : ''}.`
-        : 'Todos esses dias já tinham diária.');
-    } catch (erro) {
-      recado(erro.message);
-    }
-  });
-  elemento.querySelector('[data-encerrar]')?.addEventListener('click', () => {
-    fechar();
-    const j = janela('Encerrar viagem', `
-      <form novalidate>
-        <div class="campo">
-          <label for="e-fim">Dia da chegada</label>
-          <input id="e-fim" name="fim" type="date" required value="${hoje()}">
-        </div>
-        <div class="campo opcional">
-          <label for="e-km">Km do painel na chegada</label>
-          <input id="e-km" name="km_final" inputmode="numeric">
-        </div>
-        <div class="acoes fim">
-          <button class="btn" type="button" data-cancelar>Cancelar</button>
-          <button class="btn principal" type="submit">Encerrar</button>
-        </div>
-      </form>`);
-    const form = j.elemento.querySelector('form');
-    form.querySelector('[data-cancelar]').onclick = j.fechar;
-    aoEnviar(form, async (dados) => {
-      const r = await api('POST', 'viagem-encerrar', { id: v.id }, dados);
-      j.fechar();
-      recado(r?.offline ? GUARDADO_OFFLINE : 'Viagem encerrada.');
-      await aoConcluir?.();
-    });
-  });
-  elemento.querySelector('[data-excluir]')?.addEventListener('click', async () => {
-    if (!confirm('Excluir a viagem? Os lançamentos ficam salvos, mas sem viagem.')) return;
-    await api('DELETE', 'viagem', { id: v.id });
-    fechar();
-    recado('Viagem excluída.');
-    await aoConcluir?.();
-  });
-}
-
 function ajustaPainel(raiz) {
   raiz.querySelectorAll('table.dados').forEach((tabela) => {
     const titulos = [...tabela.querySelectorAll('thead th')].map((th) => th.textContent.trim());
@@ -2620,7 +2392,7 @@ function ajustaPainel(raiz) {
     });
   });
   raiz.querySelectorAll('.grafico-meses').forEach((grafico) => {
-    grafico.parentElement.scrollLeft = grafico.parentElement.scrollWidth;
+    grafico.parentElement.scrollLeft = 0;
   });
 }
 
@@ -2633,167 +2405,34 @@ function desenhaGraficoPorModo(r, varios, de, ate, modo = 'linha') {
   return desenhaGraficoLinha(r, varios, de);
 }
 
-function desenhaGraficoLinha(r, varios, de) {
-  const dados = varios ? r.meses : r.por_dia;
-  if (!dados || !dados.length) {
-    return '<div class="vazio"><p>Sem dados suficientes para desenhar a linha do tempo.</p></div>';
-  }
-
-  const w = 640;
-  const h = 220;
-  const padL = 60;
-  const padR = 25;
-  const padT = 30;
-  const padB = 40;
-  const chartW = w - padL - padR;
-  const chartH = h - padT - padB;
-
-  let pontosE = [];
-  let pontosS = [];
-  let labels = [];
-
-  if (varios) {
-    const maior = Math.max(1, ...r.meses.flatMap((m) => [Number(m.entradas_centavos), Number(m.saidas_centavos)]));
-    const n = r.meses.length;
-    r.meses.forEach((m, i) => {
-      const x = n === 1 ? padL + chartW / 2 : padL + (i / (n - 1)) * chartW;
-      const yE = padT + chartH - (Number(m.entradas_centavos) / maior) * chartH;
-      const yS = padT + chartH - (Number(m.saidas_centavos) / maior) * chartH;
-      pontosE.push({ x, y: yE, val: m.entradas_centavos, rotulo: mesCurto(m.mes) });
-      pontosS.push({ x, y: yS, val: m.saidas_centavos, rotulo: mesCurto(m.mes) });
-      labels.push({ x, rotulo: mesCurto(m.mes) });
-    });
-  } else {
-    const [ano, m] = de.split('-').map(Number);
-    const dias = new Date(Date.UTC(ano, m, 0)).getUTCDate();
-    const mapa = new Map(r.por_dia.map((d) => [Number(String(d.data).slice(8, 10)), Number(d.saidas_centavos)]));
-    const maior = Math.max(1, ...mapa.values(), r.atual.entradas_centavos > 0 ? r.atual.entradas_centavos / dias : 0);
-    
-    for (let d = 1; d <= dias; d++) {
-      const x = padL + ((d - 1) / (dias - 1)) * chartW;
-      const valS = mapa.get(d) || 0;
-      const yS = padT + chartH - (valS / maior) * chartH;
-      pontosS.push({ x, y: yS, val: valS, rotulo: `Dia ${d}` });
-      if (d === 1 || d === Math.round(dias / 2) || d === dias) {
-        labels.push({ x, rotulo: `Dia ${d}` });
-      }
-    }
-  }
-
-  const dLinha = (pts) => pts.length ? pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ') : '';
-  const dArea = (pts) => {
-    if (!pts.length) return '';
-    const base = padT + chartH;
-    return `${dLinha(pts)} L ${pts[pts.length - 1].x.toFixed(1)} ${base} L ${pts[0].x.toFixed(1)} ${base} Z`;
-  };
-
-  return `
-    <div class="area-desenho-grafico">
-      <div style="display:flex;align-items:center;justify-content:flex-end;gap:16px;margin-bottom:8px;font-size:0.78rem;font-weight:700">
-        ${varios ? `<span style="color:#10b981;display:flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:50%;background:#10b981;display:inline-block"></i> Fretes (Receitas)</span>` : ''}
-        <span style="color:#f43f5e;display:flex;align-items:center;gap:5px"><i style="width:10px;height:10px;border-radius:50%;background:#f43f5e;display:inline-block"></i> Gastos (Custos)</span>
-      </div>
-      <svg viewBox="0 0 ${w} ${h}">
-        <defs>
-          <linearGradient id="grad-frete" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#10b981" stop-opacity="0.35"/>
-            <stop offset="100%" stop-color="#10b981" stop-opacity="0.0"/>
-          </linearGradient>
-          <linearGradient id="grad-gasto" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#f43f5e" stop-opacity="0.3"/>
-            <stop offset="100%" stop-color="#f43f5e" stop-opacity="0.0"/>
-          </linearGradient>
-        </defs>
-
-        <!-- Grid Lines -->
-        <line x1="${padL}" y1="${padT}" x2="${w - padR}" y2="${padT}" stroke="#e2e8f0" stroke-dasharray="3 3"/>
-        <line x1="${padL}" y1="${padT + chartH * 0.5}" x2="${w - padR}" y2="${padT + chartH * 0.5}" stroke="#e2e8f0" stroke-dasharray="3 3"/>
-        <line x1="${padL}" y1="${padT + chartH}" x2="${w - padR}" y2="${padT + chartH}" stroke="#cbd5e1" stroke-width="1.5"/>
-
-        ${pontosE.length ? `
-          <path d="${dArea(pontosE)}" fill="url(#grad-frete)"/>
-          <path d="${dLinha(pontosE)}" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round"/>
-          ${pontosE.map((p) => `
-            <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.5" fill="#ffffff" stroke="#10b981" stroke-width="2.5">
-              <title>${esc(p.rotulo)}: Receita ${dinheiro(p.val)}</title>
-            </circle>`).join('')}
-        ` : ''}
-
-        ${pontosS.length ? `
-          <path d="${dArea(pontosS)}" fill="url(#grad-gasto)"/>
-          <path d="${dLinha(pontosS)}" fill="none" stroke="#f43f5e" stroke-width="2.5" stroke-linecap="round"/>
-          ${pontosS.map((p) => `
-            <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.5" fill="#ffffff" stroke="#f43f5e" stroke-width="2.5">
-              <title>${esc(p.rotulo)}: Custo ${dinheiro(p.val)}</title>
-            </circle>`).join('')}
-        ` : ''}
-
-        <!-- X Axis Labels -->
-        ${labels.map((l) => `
-          <text x="${l.x.toFixed(1)}" y="${h - 10}" font-size="11" font-weight="600" fill="#64748b" text-anchor="middle">
-            ${esc(l.rotulo)}
-          </text>`).join('')}
-      </svg>
-    </div>`;
+function serieGrafico(r,varios,de){
+ if(varios)return r.meses.map(m=>({rotulo:mesCurto(m.mes),entrada:Number(m.entradas_centavos),saida:Number(m.saidas_centavos)}));
+ const [ano,mes]=de.split('-').map(Number),dias=new Date(Date.UTC(ano,mes,0)).getUTCDate(),mapa=new Map(r.por_dia.map(d=>[Number(String(d.data).slice(8,10)),d]));
+ const passo=window.innerWidth<600?7:1,serie=[];
+ for(let dia=1;dia<=dias;dia+=passo){let entrada=0,saida=0;const fim=Math.min(dias,dia+passo-1);for(let i=dia;i<=fim;i++){entrada+=Number(mapa.get(i)?.entradas_centavos||0);saida+=Number(mapa.get(i)?.saidas_centavos||0);}serie.push({rotulo:passo===1?String(dia):`${dia}–${fim}`,entrada,saida});}return serie;
 }
-
-function desenhaGraficoBarras(r, varios, de) {
-  if (varios) {
-    const meses = r.meses;
-    const maior = Math.max(1, ...meses.flatMap((m) => [Number(m.entradas_centavos), Number(m.saidas_centavos)]));
-    return `
-      <div class="area-desenho-grafico">
-        <div style="display:flex;align-items:flex-end;justify-content:space-around;gap:14px;min-height:190px;padding:16px 0 10px 0;width:100%">
-          ${meses.map((m) => {
-            const saldo = Number(m.saldo_centavos);
-            const altE = Math.max(Number(m.entradas_centavos) / maior * 120, m.entradas_centavos > 0 ? 6 : 2);
-            const altS = Math.max(Number(m.saidas_centavos) / maior * 120, m.saidas_centavos > 0 ? 6 : 2);
-            return `
-            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;flex:1;min-width:50px">
-              <div style="display:flex;align-items:flex-end;gap:5px;height:120px">
-                <div style="width:14px;height:${altE}px;background:#10b981;border-radius:4px 4px 0 0"
-                     title="${mesCurto(m.mes)} - Receitas: ${dinheiro(m.entradas_centavos)}"></div>
-                <div style="width:14px;height:${altS}px;background:#f43f5e;border-radius:4px 4px 0 0"
-                     title="${mesCurto(m.mes)} - Gastos: ${dinheiro(m.saidas_centavos)}"></div>
-              </div>
-              <span class="badge-status ${saldo >= 0 ? 'aberta' : 'encerrada'}" style="font-size:0.7rem;padding:2px 6px">
-                ${saldo >= 0 ? '+' : '−'}${dinheiroCurto(saldo)}
-              </span>
-              <span style="font-size:0.75rem;font-weight:700;color:var(--tinta-2)">${mesCurto(m.mes)}</span>
-            </div>`;
-          }).join('')}
-        </div>
-      </div>`;
-  }
-
-  // Single month day bars
-  const [ano, m] = de.split('-').map(Number);
-  const dias = new Date(Date.UTC(ano, m, 0)).getUTCDate();
-  const mapa = new Map(r.por_dia.map((d) => [Number(String(d.data).slice(8, 10)), Number(d.saidas_centavos)]));
-  const maior = Math.max(1, ...mapa.values());
-  let barrasHtml = '';
-
-  for (let dia = 1; dia <= dias; dia++) {
-    const val = mapa.get(dia) || 0;
-    const altura = val ? Math.max((val / maior) * 110, 4) : 2;
-    barrasHtml += `
-      <div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:14px"
-           title="Dia ${dia}: ${val ? dinheiro(val) : 'sem gastos'}">
-        <div style="width:8px;height:${altura}px;background:${val ? '#f43f5e' : '#e2e8f0'};border-radius:3px 3px 0 0"></div>
-        <span style="font-size:0.65rem;color:var(--tinta-3);margin-top:4px">${dia % 5 === 0 || dia === 1 ? dia : ''}</span>
-      </div>`;
-  }
-
-  return `
-    <div class="area-desenho-grafico">
-      <div style="display:flex;align-items:flex-end;justify-content:space-between;height:140px;padding-top:14px">
-        ${barrasHtml}
-      </div>
-    </div>`;
+function graficoFluxo(r,varios,de,modo){
+ const serie=serieGrafico(r,varios,de),maximo=Math.max(1,...serie.flatMap(d=>[d.entrada,d.saida]));
+ if(!serie.some(d=>d.entrada||d.saida))return '<div class="vazio">Nenhuma movimentação neste período e filtros.</div>';
+ const w=Math.max(320,Math.min(900,(document.getElementById('conteudo')?.clientWidth||700)-80)),h=270,l=58,t=18,b=40,largura=w-l-18,altura=h-t-b;
+ const y=v=>t+altura-v/maximo*altura,x=i=>l+(i+.5)*largura/serie.length;
+ const grade=[0,.25,.5,.75,1].map(f=>`<line x1="${l}" y1="${y(f*maximo)}" x2="${w-18}" y2="${y(f*maximo)}" stroke="#e2e8f0" stroke-dasharray="3 4"/><text x="${l-8}" y="${y(f*maximo)+4}" text-anchor="end" font-size="11" fill="#64748b">${esc(dinheiroCurto(f*maximo))}</text>`).join('');
+ const salto=Math.max(1,Math.ceil(serie.length/6));
+ const labels=serie.map((d,i)=>i%salto===0||i===serie.length-1?`<text x="${x(i)}" y="${h-15}" text-anchor="middle" font-size="11" fill="#64748b">${esc(d.rotulo)}</text>`:'').join('');
+ const cores={entrada:'#059669',saida:'#e11d48'};
+ const desenho=['entrada','saida'].map((tipo,k)=>{
+  if(modo==='barras'){const barra=Math.min(25,largura/serie.length*.3);return serie.map((d,i)=>`<rect x="${x(i)+(k===0?-barra-1:1)}" y="${y(d[tipo])}" width="${barra}" height="${Math.max(0,t+altura-y(d[tipo]))}" rx="2" fill="${cores[tipo]}"><title>${esc(d.rotulo)} · ${tipo==='entrada'?'Entradas':'Saídas'}: ${dinheiro(d[tipo])}</title></rect>`).join('');}
+  const pontos=serie.map((d,i)=>`${x(i)},${y(d[tipo])}`).join(' ');
+  return `<polygon points="${x(0)},${t+altura} ${pontos} ${x(serie.length-1)},${t+altura}" fill="${cores[tipo]}" opacity=".06"/><polyline points="${pontos}" stroke="${cores[tipo]}" stroke-width="2.5" fill="none" stroke-linejoin="round"/>`+serie.map((d,i)=>d[tipo]?`<circle cx="${x(i)}" cy="${y(d[tipo])}" r="3.5" fill="white" stroke="${cores[tipo]}" stroke-width="2"><title>${esc(d.rotulo)} · ${tipo==='entrada'?'Entradas':'Saídas'}: ${dinheiro(d[tipo])}</title></circle>`:'').join('');
+ }).join('');
+ return `<div class="grafico-fluxo"><div class="grafico-legenda"><span class="legenda-entrada">● Entradas</span><span class="legenda-saida">● Saídas</span><small>Valores em R$ · ${varios?'Totais por mês':window.innerWidth<600?'Totais por semana do mês':'Totais por dia do mês'}</small></div><svg role="img" aria-label="${modo==='barras'?'Barras':'Linhas'} de entradas e saídas no período" viewBox="0 0 ${w} ${h}">${grade}${desenho}${labels}</svg><details class="grafico-dados"><summary>Consultar valores do gráfico</summary><div class="grafico-dados-lista">${serie.filter(d=>d.entrada||d.saida).map(d=>`<div><strong>${esc(d.rotulo)}</strong><span class="legenda-entrada">${dinheiro(d.entrada)}</span><span class="legenda-saida">${dinheiro(d.saida)}</span></div>`).join('')}</div></details></div>`;
 }
+function desenhaGraficoLinha(r,varios,de){return graficoFluxo(r,varios,de,'linha');}
+function desenhaGraficoBarras(r,varios,de){return graficoFluxo(r,varios,de,'barras');}
 
 function desenhaGraficoPizza(r) {
-  const cats = r.saidas_por_categoria || [];
+  const todasCats = r.saidas_por_categoria || [];
+  const cats=todasCats.length>8?[...todasCats.slice(0,7),{nome:'Outras categorias',total_centavos:todasCats.slice(7).reduce((s,c)=>s+Number(c.total_centavos),0)}]:todasCats;
   const total = Number(r.atual.saidas_centavos) || 0;
 
   if (!cats.length || total <= 0) {
@@ -2843,7 +2482,7 @@ function desenhaGraficoPizza(r) {
     <div class="layout-pizza">
       <div class="donut-svg-caixa">
         <svg viewBox="0 0 220 220" width="220" height="220" style="min-width:0">
-          ${fatiasSvg}
+          ${cats.length===1?`<circle cx="110" cy="110" r="66" fill="none" stroke="#4338ca" stroke-width="32"/>`:fatiasSvg}
           <text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="11" font-weight="700" fill="#94a3b8">TOTAL GASTOS</text>
           <text x="${cx}" y="${cy + 16}" text-anchor="middle" font-size="14" font-weight="800" fill="#0f172a">${dinheiroCurto(total)}</text>
         </svg>
@@ -2957,6 +2596,7 @@ function barras(itens, rotulo = (i) => esc(i.nome), tipo = 'saida') {
 async function telaPanorama(alvo) {
   const atual = hoje().slice(0, 7);
   const periodo = { de: atual, ate: atual };
+  const filtrosPanorama={usuario_id:"",caminhao_id:"",categoria_id:""},rotulosPanorama={};let geracaoPanorama=0;
 
   alvo.innerHTML = `
     <div class="pilha">
@@ -2984,20 +2624,21 @@ async function telaPanorama(alvo) {
           </div>
           <div class="campo acao-filtro-atalhos">
             <label class="rotulo-invisivel-alinhamento">&nbsp;</label>
-            <button class="btn-icone-filtro-panorama" type="button" id="p-btn-atalhos" title="Atalhos rápidos de período">
-              ${icone('filtro')} <span>Atalhos</span>
+            <button class="btn-icone-filtro-panorama" type="button" id="p-btn-atalhos" title="Filtros do Panorama" aria-label="Filtros do Panorama">
+              ${icone('filtro')} <span>Filtros</span>
             </button>
           </div>
         </div>
       </div>
 
-      <div id="painel"><p class="carregando">Carregando indicadores da frota…</p></div>
+      <p class="ajuda" id="panorama-filtros-ativos"></p><div id="painel"><p class="carregando">Carregando indicadores da frota…</p></div>
     </div>`;
 
   const campoDe = alvo.querySelector('#p-de');
   const campoAte = alvo.querySelector('#p-ate');
 
   const atualiza = async () => {
+    const geracao=++geracaoPanorama;const filtros=Object.fromEntries(Object.entries(filtrosPanorama).filter(([,v])=>v));
     if (periodo.de > periodo.ate) [periodo.de, periodo.ate] = [periodo.ate, periodo.de];
     campoDe.value = periodo.de;
     campoAte.value = periodo.ate;
@@ -3007,16 +2648,17 @@ async function telaPanorama(alvo) {
     const { de, ate } = periodo;
     const varios = de !== ate;
     document.getElementById('p-periodo').textContent = periodoLongo(de, ate);
-    document.getElementById('p-pdf').href = endereco('pdf-panorama', { de, ate });
+    document.getElementById('p-pdf').href = endereco('pdf-panorama', { de, ate,...filtros });
 
     let r;
     try {
-      r = await api('GET', 'resumo', { de, ate });
+      r = await api('GET', 'resumo', { de, ate,...filtros });
     } catch (erro) {
       painel.innerHTML = `<div class="aviso erro">${esc(erro.message)}</div>`;
       return;
     }
-    if (periodo.de !== de || periodo.ate !== ate) return;
+    if (geracao!==geracaoPanorama) return;
+    alvo.querySelector("#panorama-filtros-ativos").textContent=Object.values(filtros).filter(Boolean).length ? Object.values(rotulosPanorama).filter(Boolean).join(" · ")+". Valores e PDF filtrados. Pendente: geral da frota. Km: viagens do motorista/caminhão." : "Todos os motoristas, caminhões e categorias.";
 
     const saldo = r.atual.saldo_centavos;
     const saldoAnterior = r.anterior.saldo_centavos;
@@ -3066,7 +2708,7 @@ async function telaPanorama(alvo) {
               <span class="valor" style="color:#fb7185">${dinheiro(r.atual.saidas_centavos)}</span>
             </div>
             <div class="item-mini-hero clicavel" id="kpi-a-receber" role="button" tabindex="0" title="Ver fretes a receber">
-              <span class="rotulo">A receber dos clientes ›</span>
+              <span class="rotulo">A receber · geral da frota ›</span>
               <span class="valor" style="color:#fcd34d">${dinheiro(r.a_receber.a_receber_centavos)}</span>
               ${r.a_receber.vencido_centavos
                 ? `<span class="rotulo" style="color:#fda4af">${dinheiro(r.a_receber.vencido_centavos)} vencido</span>` : ''}
@@ -3088,7 +2730,7 @@ async function telaPanorama(alvo) {
           <div class="card-kpi">
             <div class="icone-kpi verde">${icone('receber')}</div>
             <div class="corpo-kpi">
-              <span class="rotulo">Frete Faturado</span>
+              <span class="rotulo">Fretes recebidos</span>
               <span class="valor entrada">${dinheiro(r.atual.entradas_centavos)}</span>
               <span class="subtexto">${r.viagens_abertas} ${r.viagens_abertas === 1 ? 'viagem em rota' : 'viagens em rota'}</span>
             </div>
@@ -3099,7 +2741,7 @@ async function telaPanorama(alvo) {
             <div class="corpo-kpi">
               <span class="rotulo">Gastos Operacionais</span>
               <span class="valor saida">${dinheiro(r.atual.saidas_centavos)}</span>
-              <span class="subtexto">${r.atual.qtd} despesas registradas</span>
+              <span class="subtexto">${r.atual.qtd} lançamentos no período</span>
             </div>
           </div>
 
@@ -3126,8 +2768,8 @@ async function telaPanorama(alvo) {
         <div class="cartao painel-grafico" id="bloco-grafico-panorama">
           <div class="topo-grafico">
             <div>
-              <h2 style="margin:0 0 4px">Evolução & Distribuição Financeira</h2>
-              <p class="ajuda" style="margin:0 0 4px">Alterne entre visualização de Linha, Barras ou Distribuição em Pizza.</p>
+              <h2 style="margin:0 0 4px">Entradas e saídas</h2>
+              <p class="ajuda" style="margin:0 0 4px">Compare o fluxo financeiro ou consulte a composição das despesas.</p>
             </div>
             <div class="seletor-grafico" role="group" aria-label="Visualização do gráfico">
               <button type="button" data-modo-grafico="linha" aria-pressed="${estado.modoGrafico === 'linha'}">
@@ -3201,9 +2843,20 @@ async function telaPanorama(alvo) {
         </div>
       </div>`;
 
+    estado.observadorGrafico?.disconnect();
+    const areaGrafico=painel.querySelector('#conteudo-grafico-ativo');let tamanhoGrafico='';
+    if(window.ResizeObserver && areaGrafico){
+      const observador=new ResizeObserver(()=>{
+        if(!areaGrafico.isConnected){observador.disconnect();return;}
+        const tamanho=areaGrafico.clientWidth+'|'+(window.innerWidth<600);
+        if(tamanho===tamanhoGrafico)return;tamanhoGrafico=tamanho;
+        areaGrafico.innerHTML=desenhaGraficoPorModo(r,varios,de,ate,estado.modoGrafico);
+      });observador.observe(areaGrafico);estado.observadorGrafico=observador;
+    }
     const kpiReceber = painel.querySelector('#kpi-a-receber');
-    kpiReceber.onclick = () => abreAba('receber');
-    kpiReceber.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); abreAba('receber'); } };
+    ajustaPainel(painel);
+    kpiReceber.onclick = () => { estado.viagensSomentePendentes = true; abreAba('viagens'); };
+    kpiReceber.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); estado.viagensSomentePendentes = true; abreAba('viagens'); } };
 
     // Connect Chart Switcher Buttons (Linha, Barras, Pizza)
     painel.querySelectorAll('[data-modo-grafico]').forEach((btn) => {
@@ -3230,37 +2883,20 @@ async function telaPanorama(alvo) {
   };
   const bAtalhos = alvo.querySelector('#p-btn-atalhos');
   if (bAtalhos) {
-    bAtalhos.onclick = () => {
-      const atalhos = atalhosPeriodo();
-      const { elemento, fechar } = janela('Atalhos de Período', `
-        <div class="pilha">
-          <p class="ajuda" style="margin-top:0">Selecione um período rápido para preencher o mês inicial e final:</p>
-          <div class="lista-atalhos-periodo">
-            ${atalhos.map((a, i) => {
-              const ativo = a.de === periodo.de && a.ate === periodo.ate;
-              return `
-                <button type="button" class="item-atalho-periodo ${ativo ? 'ativo' : ''}" data-idx-atalho="${i}">
-                  <div style="display:flex;align-items:center;gap:10px">
-                    <span class="ponto-atalho ${ativo ? 'ativo' : ''}"></span>
-                    <strong>${esc(a.nome)}</strong>
-                  </div>
-                  <small style="color:var(--tinta-3)">${mesCurto(a.de)}${a.de !== a.ate ? ` → ${mesCurto(a.ate)}` : ''}</small>
-                </button>`;
-            }).join('')}
-          </div>
-        </div>`);
-
-      elemento.querySelectorAll('[data-idx-atalho]').forEach((btn) => {
-        btn.onclick = () => {
-          const a = atalhos[Number(btn.dataset.idxAtalho)];
-          periodo.de = a.de;
-          periodo.ate = a.ate;
-          fechar();
-          atualiza();
-        };
-      });
+    bAtalhos.onclick = async () => {
+      try {
+        const [motoristas,caminhoes,categorias]=await Promise.all([api('GET','usuarios'),api('GET','caminhoes',{todos:1}),api('GET','categorias',{todos:1})]);
+        const opcoes=(itens,valor,nome)=>itens.map(i=>`<option value="${esc(i.id)}" ${String(i.id)===String(valor)?'selected':''}>${esc(nome(i))}</option>`).join('');
+        const atalhos=atalhosPeriodo();
+        const {elemento,fechar}=janela('Filtros do Panorama',`<form class="form-pilha"><div class="linha duas"><div class="campo"><label for="pf-de">Mês inicial</label><input type="month" id="pf-de" name="de" value="${periodo.de}" required></div><div class="campo"><label for="pf-ate">Mês final</label><input type="month" id="pf-ate" name="ate" value="${periodo.ate}" required></div></div><div class="atalhos-panorama">${atalhos.map((a,i)=>`<button type="button" class="btn pequeno" data-atalho="${i}">${esc(a.nome)}</button>`).join('')}</div><div class="campo"><label for="pf-motorista">Motorista / responsável</label><select id="pf-motorista" name="usuario_id"><option value="">Todos</option>${opcoes(motoristas,filtrosPanorama.usuario_id,i=>i.nome)}</select></div><div class="campo"><label for="pf-caminhao">Caminhão</label><select id="pf-caminhao" name="caminhao_id"><option value="">Todos</option>${opcoes(caminhoes,filtrosPanorama.caminhao_id,i=>[i.placa,i.apelido].filter(Boolean).join(' · '))}</select></div><div class="campo"><label for="pf-categoria">Categoria</label><select id="pf-categoria" name="categoria_id"><option value="">Todas</option>${opcoes(categorias,filtrosPanorama.categoria_id,i=>(i.tipo==='entrada'?'Entrada: ':'Gasto: ')+i.nome)}</select></div><div class="acoes fim"><button type="button" class="btn" data-limpar>Limpar</button><button type="submit" class="btn principal">Aplicar filtros</button></div></form>`);
+        const form=elemento.querySelector('form');
+        form.querySelectorAll('[data-atalho]').forEach(b=>b.onclick=()=>{const a=atalhos[Number(b.dataset.atalho)];form.elements.de.value=a.de;form.elements.ate.value=a.ate;});
+        form.querySelector('[data-limpar]').onclick=()=>{form.elements.de.value=atual;form.elements.ate.value=atual;['usuario_id','caminhao_id','categoria_id'].forEach(k=>form.elements[k].value='');};
+        aoEnviar(form,async(dados)=>{periodo.de=dados.de;periodo.ate=dados.ate;for(const k of Object.keys(filtrosPanorama)){filtrosPanorama[k]=dados[k]||'';rotulosPanorama[k]=dados[k]?form.elements[k].selectedOptions[0].textContent:'';}fechar();await atualiza();});
+      }catch(e){recado(e.message);}
     };
   }
+
   await atualiza();
 }
 
@@ -3298,14 +2934,27 @@ async function excluiCaminhao(c, aoConcluir) {
   }
 }
 
+function organizaPainelAjustes(alvo, admin) {
+  const raiz=alvo.querySelector('.ajustes-organizados');
+  if(!admin)return;
+  const secoes=[['usuarios','Motoristas','usuario'],['caminhoes','Caminhões','caminhao'],['categorias','Categorias','lista'],['preferencias','Minha conta','ajustes']];
+  const nav=document.createElement('div');nav.className='ajustes-navegacao';nav.setAttribute('role','group');nav.setAttribute('aria-label','Seções dos ajustes');
+  nav.innerHTML=secoes.map(([id,nome,ico])=>`<button type="button" data-ajustes-painel="${id}" aria-pressed="false">${icone(ico)}${nome}</button>`).join('');
+  const preferencia=document.createElement('div');preferencia.id='secao-preferencias';preferencia.className='pilha';
+  for(const filho of [...raiz.children])if(!filho.classList.contains('titulo-secao') && !['secao-usuarios','secao-caminhoes','secao-categorias'].includes(filho.id))preferencia.append(filho);
+  raiz.append(preferencia);raiz.querySelector('.titulo-secao').after(nav);
+  const abrir=(id)=>{nav.querySelectorAll('button').forEach((b)=>b.setAttribute('aria-pressed',String(b.dataset.ajustesPainel===id)));secoes.forEach(([chave])=>{const painel=raiz.querySelector('#secao-'+chave);painel.classList.add('ajustes-painel');painel.hidden=chave!==id;});};
+  nav.querySelectorAll('button').forEach((b)=>b.onclick=()=>abrir(b.dataset.ajustesPainel));abrir('usuarios');
+}
+
 async function telaAjustes(alvo) {
   const admin = ehAdmin();
   alvo.innerHTML = `
-    <div class="pilha">
+    <div class="pilha ajustes-organizados">
       <div class="titulo-secao">
         <div>
-          <h1>${admin ? 'Ajustes & Gestão da Frota' : 'Meu Perfil & Acesso'}</h1>
-          <p>${esc(estado.usuario.nome)} - <strong style="color:var(--primaria)">${admin ? 'Proprietário' : 'Motorista'}</strong></p>
+          <h1>${admin ? 'Ajustes' : 'Meu perfil'}</h1>
+          <p>${admin ? 'Equipe, veículos, categorias e preferências em um só lugar.' : 'Suas preferências e informações de acesso.'}</p>
         </div>
       </div>
 
@@ -3354,18 +3003,18 @@ async function telaAjustes(alvo) {
             </button>
           </div>
 
-          <button type="button" class="btn-acordeon-categorias" id="b-toggle-categorias" aria-expanded="false">
+          <button type="button" class="btn-acordeon-categorias" id="b-toggle-categorias" aria-expanded="true">
             <div class="info-acordeon">
               <span class="icone-acordeon">${icone('lista')}</span>
               <span id="rotulo-acordeon-categorias">Categorias cadastradas</span>
             </div>
             <div class="seta-acordeon">
-              <span class="texto-acao-acordeon" id="texto-estado-acordeon">Expandir</span>
-              <span class="chevron-acordeon" id="icone-chevron-acordeon">▾</span>
+              <span class="texto-acao-acordeon" id="texto-estado-acordeon">Recolher</span>
+              <span class="chevron-acordeon" id="icone-chevron-acordeon">▴</span>
             </div>
           </button>
 
-          <div class="corpo-acordeon-categorias oculto" id="conteudo-acordeon-categorias" style="margin-top:14px">
+          <div class="corpo-acordeon-categorias" id="conteudo-acordeon-categorias" style="margin-top:14px">
             <div class="filtro-pills-ajustes" role="group" aria-label="Filtrar categorias" id="filtro-categorias-ajustes">
               <button type="button" data-filtro-cat="todos" aria-pressed="true">Todas</button>
               <button type="button" data-filtro-cat="saida" aria-pressed="false">Gastos / Despesas</button>
@@ -3378,6 +3027,7 @@ async function telaAjustes(alvo) {
           </div>
         </div>` : ''}
 
+      <form class="cartao form-pilha" id="form-meu-caminhao"><div><h2>Meu caminhão padrão</h2><p class="ajuda">Ele fica selecionado nos novos formulários. Você pode escolher outro em cada registro.</p></div><div class="campo"><label for="meu-caminhao">Caminhão</label><select id="meu-caminhao" name="caminhao_padrao_id">${opcoesCaminhao(estado.usuario.caminhao_padrao_id).replace('Selecione o caminhão','Sem caminhão padrão')}</select></div><div class="acoes"><button type="submit" class="btn principal">${icone('check')} Salvar preferência</button></div></form>
       <!-- Alterar Senha -->
       <form class="cartao" novalidate id="form-alterar-senha">
         <h2>Segurança & Senha de Acesso</h2>
@@ -3406,6 +3056,14 @@ async function telaAjustes(alvo) {
       </div>
     </div>`;
 
+  organizaPainelAjustes(alvo, admin);
+
+  aoEnviar(alvo.querySelector('#form-meu-caminhao'),async (dados)=>{
+    const r=await api('POST','meu-caminhao',{},dados);
+    estado.usuario=r?.offline ? {...estado.usuario,caminhao_padrao_id:dados.caminhao_padrao_id || null} : r;
+    await memorizaDados('eu',{},estado.usuario);
+    recado(r?.offline ? GUARDADO_OFFLINE : 'Caminhão padrão atualizado.');
+  });
   const formSenha = alvo.querySelector('#form-alterar-senha');
   if (formSenha) {
     aoEnviar(formSenha, async (dados) => {
@@ -3458,6 +3116,7 @@ async function telaAjustes(alvo) {
                 </div>
               </div>
               <div class="acoes-entidade-ajustes">
+                ${seloCadastro(u)}
                 <button class="btn pequeno" type="button" data-editar-usuario="${u.id}">
                   ${icone('editar')} Editar
                 </button>
@@ -3492,6 +3151,7 @@ async function telaAjustes(alvo) {
               </div>
             </div>
             <div class="acoes-entidade-ajustes">
+              ${seloCadastro(c)}
               <button class="btn pequeno" type="button" data-editar-caminhao="${c.id}">
                 ${icone('editar')} Editar
               </button>
@@ -3508,6 +3168,7 @@ async function telaAjustes(alvo) {
       const containerCats = document.getElementById('lista-categorias');
       if (!containerCats) return;
 
+      categorias.sort((a,b)=>a.tipo.localeCompare(b.tipo)||Number(b.ativo)-Number(a.ativo)||Number(a.ordem)-Number(b.ordem)||a.nome.localeCompare(b.nome));
       const filtradas = categorias.filter((c) => {
         if (filtroCategoriaAtivo === 'todos') return true;
         return c.tipo === filtroCategoriaAtivo;
@@ -3519,18 +3180,19 @@ async function telaAjustes(alvo) {
       }
 
       containerCats.innerHTML = `
-        <div class="grade-categorias-ajustes">
-          ${filtradas.map((c) => {
+        <p class="ajuda">Arraste pela alça para ordenar. No celular, segure a alça; no teclado, use as setas. Gastos e entradas mantêm ordens independentes.</p><div class="grade-categorias-ajustes categorias-ordenaveis">
+          ${filtradas.map((c,indice) => {
             const qtd = Number(c.qtd_lancamentos) || 0;
             const ehEntrada = c.tipo === 'entrada';
             return `
-            <div class="item-categoria-cartao ${Number(c.ativo) ? '' : 'inativa'}">
-              <div class="cabecalho-categoria-cartao">
+            ${indice===0||filtradas[indice-1].tipo!==c.tipo?`<h3 class="categoria-grupo-titulo">${c.tipo==='entrada'?'Entradas':'Gastos e despesas'} <small>${filtradas.filter(item=>item.tipo===c.tipo).length} categorias</small></h3>`:''}
+            <div data-categoria-ordem="${esc(c.id)}" class="item-categoria-cartao ${Number(c.ativo) ? '' : 'inativa'}">
+              <button class="alca-categoria" draggable="true" type="button" data-arrastar="${esc(c.id)}" aria-label="Ordenar ${esc(c.nome)}. Use as setas para mover.">⠿</button><div class="cabecalho-categoria-cartao">
                 <div class="icone-categoria-caixa ${c.tipo}">
-                  ${icone(ehEntrada ? 'receber' : (c.pede_litros ? 'combustivel' : 'tag'))}
+                  ${icone(ICONES_SVG[c.icone]?c.icone:ehEntrada?'receber':Number(c.pede_litros)?'combustivel':'tag')}
                 </div>
                 <div class="detalhes-categoria-cartao">
-                  <strong>${esc(c.nome)}</strong>
+                  <strong>${esc(c.nome)}</strong>${seloCadastro(c)}
                   <div class="badges-categoria-linha">
                     <span class="tag-meta ${c.tipo}">
                       ${ehEntrada ? 'Receita / Frete' : 'Despesa'}
@@ -3557,12 +3219,36 @@ async function telaAjustes(alvo) {
           }).join('')}
         </div>`;
 
+      let movendo=null,ocupado=false;
+      const mover=async(origem,destino)=>{
+        if(ocupado||String(origem)===String(destino))return;
+        if(categorias.some(c=>Fila.ehLocal(c.id))){recado('Sincronize as novas categorias antes de organizar a ordem.');return;}
+        const item=categorias.find(c=>String(c.id)===String(origem)),alvo=categorias.find(c=>String(c.id)===String(destino));
+        if(!item||!alvo||item.tipo!==alvo.tipo||Number(item.ativo)!==Number(alvo.ativo)){recado('Mova dentro do mesmo tipo e situação da categoria.');return;}
+        const lista=categorias.filter(c=>c.tipo===item.tipo),de=lista.indexOf(item),ate=lista.indexOf(alvo);lista.splice(de,1);lista.splice(ate,0,item);
+        ocupado=true;containerCats.setAttribute('aria-busy','true');
+        try{await api('PUT','categorias-ordem',{}, {tipo:item.tipo,ids:lista.map(c=>c.id)});await atualiza();containerCats.querySelector('[data-arrastar="'+item.id+'"]')?.focus({preventScroll:true});recado('Ordem das categorias salva.');}catch(e){recado(e.message);}finally{ocupado=false;containerCats.removeAttribute('aria-busy');}
+      };
+      containerCats.querySelectorAll('[data-categoria-ordem]').forEach(card=>{
+        card.ondragover=e=>{e.preventDefault();card.classList.add('categoria-destino');};card.ondragleave=()=>card.classList.remove('categoria-destino');
+        card.ondrop=e=>{e.preventDefault();containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));mover(movendo,card.dataset.categoriaOrdem);};
+      });
+      containerCats.querySelectorAll('[data-arrastar]').forEach(alca=>{
+        alca.ondragstart=e=>{movendo=alca.dataset.arrastar;e.dataTransfer.setData('text/plain',movendo);e.dataTransfer.effectAllowed='move';};
+        alca.ondragend=()=>containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));
+        alca.onkeydown=e=>{if(!['ArrowUp','ArrowDown'].includes(e.key))return;e.preventDefault();const c=categorias.find(c=>String(c.id)===alca.dataset.arrastar),lista=categorias.filter(x=>x.tipo===c.tipo&&Number(x.ativo)===Number(c.ativo)),i=lista.indexOf(c),alvo=lista[i+(e.key==='ArrowUp'?-1:1)];if(alvo)mover(c.id,alvo.id);};
+        let destino=null;
+        alca.onpointerdown=e=>{if(e.pointerType==='mouse')return;e.preventDefault();movendo=alca.dataset.arrastar;destino=null;alca.setPointerCapture(e.pointerId);alca.classList.add('arrastando');};
+        alca.onpointermove=e=>{if(!alca.hasPointerCapture(e.pointerId))return;if(e.clientY>window.innerHeight-100)window.scrollBy(0,20);else if(e.clientY<120)window.scrollBy(0,-20);containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));const card=document.elementFromPoint(e.clientX,e.clientY)?.closest('[data-categoria-ordem]');if(card){destino=card.dataset.categoriaOrdem;card.classList.add('categoria-destino');}};
+        alca.onpointerup=e=>{if(!alca.hasPointerCapture(e.pointerId))return;alca.releasePointerCapture(e.pointerId);alca.classList.remove('arrastando');containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));if(destino)mover(movendo,destino);};
+        alca.onpointercancel=()=>{alca.classList.remove('arrastando');containerCats.querySelectorAll('.categoria-destino').forEach(c=>c.classList.remove('categoria-destino'));};
+      });
       containerCats.querySelectorAll('[data-editar-categoria]').forEach((b) => {
-        const c = categorias.find((x) => Number(x.id) === Number(b.dataset.editarCategoria));
+        const c = categorias.find((x) => String(x.id) === String(b.dataset.editarCategoria));
         b.onclick = () => formCategoria(c, atualiza);
       });
       containerCats.querySelectorAll('[data-excluir-categoria]').forEach((b) => {
-        const c = categorias.find((x) => Number(x.id) === Number(b.dataset.excluirCategoria));
+        const c = categorias.find((x) => String(x.id) === String(b.dataset.excluirCategoria));
         b.onclick = () => excluiCategoria(c, atualiza);
       });
     };
@@ -3600,21 +3286,21 @@ async function telaAjustes(alvo) {
 
     // Wire User actions
     alvo.querySelectorAll('[data-editar-usuario]').forEach((b) => {
-      const u = usuarios.find((x) => Number(x.id) === Number(b.dataset.editarUsuario));
+      const u = usuarios.find((x) => String(x.id) === String(b.dataset.editarUsuario));
       b.onclick = () => formUsuario(u, atualiza);
     });
     alvo.querySelectorAll('[data-excluir-usuario]').forEach((b) => {
-      const u = usuarios.find((x) => Number(x.id) === Number(b.dataset.excluirUsuario));
+      const u = usuarios.find((x) => String(x.id) === String(b.dataset.excluirUsuario));
       b.onclick = () => excluiUsuario(u, atualiza);
     });
 
     // Wire Truck actions
     alvo.querySelectorAll('[data-editar-caminhao]').forEach((b) => {
-      const c = caminhoes.find((x) => Number(x.id) === Number(b.dataset.editarCaminhao));
+      const c = caminhoes.find((x) => String(x.id) === String(b.dataset.editarCaminhao));
       b.onclick = () => formCaminhao(c, atualiza);
     });
     alvo.querySelectorAll('[data-excluir-caminhao]').forEach((b) => {
-      const c = caminhoes.find((x) => Number(x.id) === Number(b.dataset.excluirCaminhao));
+      const c = caminhoes.find((x) => String(x.id) === String(b.dataset.excluirCaminhao));
       b.onclick = () => excluiCaminhao(c, atualiza);
     });
   };
@@ -3625,10 +3311,21 @@ async function telaAjustes(alvo) {
   await atualiza();
 }
 
+function organizaCadastroMotorista(form) {
+  const antes=[...form.children].find((el)=>el.matches('.acoes.fim'));
+  for(const [titulo,ids] of [['Dados pessoais',['u-nome','u-telefone']],['Acesso ao sistema',['u-usuario','u-senha','u-papel','u-ativo']],['Rotina de trabalho',['u-diaria','u-caminhao']]]) {
+    const bloco=document.createElement('fieldset');bloco.className='registro-secao cadastro-grade';
+    const legenda=document.createElement('legend');legenda.textContent=titulo;bloco.append(legenda);
+    ids.forEach((id)=>{const campo=form.querySelector('#'+id)?.closest('.campo');if(campo)bloco.append(campo);});
+    form.insertBefore(bloco,antes);
+  }
+  form.querySelectorAll(':scope > .linha').forEach((linha)=>{if(!linha.children.length)linha.remove();});
+}
+
 function formUsuario(u, aoConcluir) {
   const novo = !u;
   const { elemento, fechar } = janela(novo ? 'Novo Motorista ou Acesso' : `Editar ${u.nome}`, `
-    <form novalidate>
+    <form class="form-pilha form-cadastro-ajustes" novalidate>
       <div class="campo">
         <label for="u-nome">Nome completo ou apelido</label>
         <input id="u-nome" name="nome" required maxlength="80" value="${esc(u?.nome || '')}" placeholder="Ex.: Carlos Eduardo">
@@ -3698,6 +3395,7 @@ function formUsuario(u, aoConcluir) {
       </div>
     </form>`);
   const form = elemento.querySelector('form');
+  organizaCadastroMotorista(form);
   form.querySelector('[data-cancelar]').onclick = fechar;
 
   const btnRemover = form.querySelector('[data-remover-usuario]');
@@ -3721,7 +3419,7 @@ function formUsuario(u, aoConcluir) {
 function formCaminhao(c, aoConcluir) {
   const novo = !c;
   const { elemento, fechar } = janela(novo ? 'Novo Caminhão' : `Editar Caminhão ${c.placa}`, `
-    <form novalidate>
+    <form class="form-pilha form-cadastro-ajustes" novalidate>
       <div class="campo">
         <label for="t-placa">Placa do veículo</label>
         <input id="t-placa" name="placa" required maxlength="10" autocapitalize="characters"
@@ -3779,8 +3477,9 @@ function formCategoria(c, aoConcluir) {
   const novo = !c;
   const tipo = c?.tipo || 'saida';
   const travada = !novo && Number(c.qtd_lancamentos) > 0;
-  const { elemento, fechar } = janela(novo ? 'Nova Categoria Financeira' : `Editar Categoria ${c.nome}`, `
-    <form novalidate>
+  const { elemento, fechar } = janela(novo ? 'Nova categoria' : `Editar categoria ${c.nome}`, `
+    <form class="form-pilha form-categoria form-cadastro-ajustes" novalidate>
+      ${novo?'<div class="categoria-modelos"><small>Começar com um modelo</small><div><button type="button" data-modelo="Combustível">Combustível</button><button type="button" data-modelo="Manutenção">Manutenção</button><button type="button" data-modelo="Pedágio">Pedágio</button><button type="button" data-modelo="Frete">Frete</button></div></div>':''}
       <div class="campo">
         <label>Tipo de movimentação</label>
         ${travada ? '<p class="dica">Já possui lançamentos associados, por isso o tipo não pode ser alterado.</p>' : ''}
@@ -3797,13 +3496,10 @@ function formCategoria(c, aoConcluir) {
         <p class="dica" data-exemplo>${EXEMPLOS_CATEGORIA[tipo]}</p>
         <input id="k-nome" name="nome" required maxlength="40" value="${esc(c?.nome || '')}" placeholder="Ex.: Manutenção Preventiva">
       </div>
+      <div class="campo"><label for="k-icone">Ícone</label><select id="k-icone" name="icone">${[['tag','Etiqueta'],['combustivel','Combustível'],['caminhao','Caminhão'],['rota','Viagem'],['receber','Recebimento'],['nota','Documento'],['usuario','Equipe'],['ajustes','Serviço'],...[c?.icone && !['tag','combustivel','caminhao','rota','receber','nota','usuario','ajustes'].includes(c.icone)?[c.icone,'Ícone atual']:null].filter(Boolean)].map(([id,nome])=>`<option value="${esc(id)}" ${c?.icone===id?'selected':''}>${nome}</option>`).join('')}</select></div>
+      <fieldset class="categoria-regras"><legend>Campos ao lançar</legend><label><input type="checkbox" name="pede_descricao" value="1" ${Number(c?.pede_descricao)?'checked':''}> Solicitar uma descrição</label><label><input type="checkbox" name="pede_litros" value="1" ${Number(c?.pede_litros)?'checked':''} ${travada||tipo==='entrada'?'disabled':''}> Registrar litros e quilometragem (gastos)</label>${travada?'<small>O controle de abastecimento é preservado porque a categoria já possui lançamentos.</small>':''}</fieldset>
       <div class="campo ${tipo === 'saida' ? '' : 'oculto'}" data-so-gasto>
-        <label class="caixa-marcar">
-          <input type="checkbox" name="oculta_motorista" value="1" ${Number(c?.oculta_motorista) ? 'checked' : ''}>
-          <span>Esconder dos motoristas
-            <small>Para gastos que só o escritório lança, como salário e diárias. O motorista não vê nem usa.</small>
-          </span>
-        </label>
+        <label for="k-visivel">Visível aos motoristas?</label><select id="k-visivel" name="visivel_motorista"><option value="1" ${!Number(c?.oculta_motorista) ? 'selected' : ''}>Sim</option><option value="0" ${Number(c?.oculta_motorista) ? 'selected' : ''}>Não</option></select><small>Quando não estiver visível, apenas o proprietário poderá usar esta categoria.</small>
       </div>
       ${novo ? '' : `
         <div class="campo">
@@ -3833,18 +3529,23 @@ function formCategoria(c, aoConcluir) {
     };
   }
 
+  form.querySelectorAll('[data-modelo]').forEach(b=>b.onclick=()=>{const nome=b.dataset.modelo;form.querySelector('[data-tipo="'+(nome==='Frete'?'entrada':'saida')+'"]').click();form.elements.nome.value=nome;form.elements.icone.value=nome==='Combustível'?'combustivel':nome==='Frete'?'receber':nome==='Manutenção'?'ajustes':'tag';form.elements.pede_litros.checked=nome==='Combustível';});
   form.querySelectorAll('[data-tipo]').forEach((b) => {
     b.onclick = () => {
       form.querySelectorAll('[data-tipo]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
       form.elements.tipo.value = b.dataset.tipo;
       form.querySelector('[data-exemplo]').textContent = EXEMPLOS_CATEGORIA[b.dataset.tipo];
       form.querySelector('[data-so-gasto]').classList.toggle('oculto', b.dataset.tipo !== 'saida');
+      form.elements.pede_litros.disabled=travada||b.dataset.tipo==='entrada';if(b.dataset.tipo==='entrada')form.elements.pede_litros.checked=false;
     };
   });
 
   aoEnviar(form, async (dados) => {
     dados.ativo = dados.ativo === undefined ? true : dados.ativo === '1';
-    dados.oculta_motorista = dados.oculta_motorista === '1';
+    dados.oculta_motorista = dados.tipo === 'saida' && dados.visivel_motorista === '0';
+    delete dados.visivel_motorista;
+    dados.pede_descricao=dados.pede_descricao==='1';
+    dados.pede_litros=travada?Boolean(Number(c.pede_litros)):dados.tipo==='saida' && dados.pede_litros==='1';
     if (novo) await api('POST', 'categorias', {}, dados);
     else await api('PUT', 'categoria', { id: c.id }, dados);
     fechar();
@@ -3905,8 +3606,8 @@ function opcoesPagamento(selecionado) {
 }
 
 function rotuloViagem(v) {
-  return `${v.origem} → ${v.destino}${v.inicio ? ` (saída ${dataDiaMes(v.inicio)})` : ''}`
-    + `${ehAdmin() && v.motorista ? ` - ${v.motorista}` : ''}`;
+  return `${localViagem(v.origem)} → ${localViagem(v.destino)}${v.inicio ? ` (saída ${dataDiaMes(v.inicio)})` : ''}`
+    + `${ehAdmin() && v.motorista ? ` · ${v.motorista}` : ''}`;
 }
 
 function cartaoKpi(cor, ico, rotulo, valor, subtexto, classeValor = '') {
@@ -4076,7 +3777,7 @@ async function abreRecebivel(id, aoConcluir) {
     ['Data do frete', dataCurta(r.data)],
     ['Vencimento', r.vencimento ? dataCurta(r.vencimento) : null],
     ['Viagem', r.viagem_origem ? `${r.viagem_origem} → ${r.viagem_destino}` : null],
-    ['Caminhão', r.placa ? `${r.placa}${r.caminhao_apelido ? ` - ${r.caminhao_apelido}` : ''}` : null],
+    ['Caminhão', r.placa ? `${r.placa}${r.caminhao_apelido ? ` · ${r.caminhao_apelido}` : ''}` : null],
     ['Nota fiscal', r.nota_fiscal_id ? `NF ${r.nota_numero || 'sem número'}` : null],
     ['Último recebimento', r.ultimo_recebimento ? dataCurta(r.ultimo_recebimento) : null],
     ['Observação', r.observacao],
@@ -4125,8 +3826,8 @@ async function abreRecebivel(id, aoConcluir) {
     </div>`);
 
   ligaItens(elemento);
-  elemento.querySelector('[data-editar]').onclick = () => { fechar(); formRecebivel(r, aoConcluir); };
-  elemento.querySelector('[data-receber]')?.addEventListener('click', () => { fechar(); formRecebimento(r, aoConcluir); });
+  elemento.querySelector('[data-editar]').onclick = () => { formRecebivel(r, aoConcluir); };
+  elemento.querySelector('[data-receber]')?.addEventListener('click', () => { formRecebimento(r, aoConcluir); });
   elemento.querySelector('[data-excluir]').onclick = async () => {
     if (!confirm('Excluir este frete a receber? O que já foi recebido continua em Lançamentos como entrada.')) return;
     try {
@@ -4166,7 +3867,7 @@ async function formRecebivel(r, aoConcluir, base = {}) {
           <label for="rb-categoria">Tipo de frete</label>
           <select id="rb-categoria" name="categoria_id" required>
             ${comOExtra(tipos, v.categoria_id ? { id: v.categoria_id, nome: v.categoria } : null).map((c) => `
-              <option value="${c.id}" ${Number(v.categoria_id) === Number(c.id) ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
+              <option value="${c.id}" ${String(v.categoria_id) === String(c.id) ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
           </select>
         </div>
         <div class="campo">
@@ -4199,7 +3900,7 @@ async function formRecebivel(r, aoConcluir, base = {}) {
           <select id="rb-viagem" name="viagem_id">
             <option value="">Sem viagem</option>
             ${viagens.map((x) => `
-              <option value="${x.id}" ${Number(v.viagem_id) === Number(x.id) ? 'selected' : ''}>${esc(rotuloViagem(x))}</option>`).join('')}
+              <option value="${x.id}" ${String(v.viagem_id) === String(x.id) ? 'selected' : ''}>${esc(rotuloViagem(x))}</option>`).join('')}
           </select>
         </div>
         <div class="campo opcional">
@@ -4216,8 +3917,8 @@ async function formRecebivel(r, aoConcluir, base = {}) {
         <select id="rb-nota" name="nota_fiscal_id">
           <option value="">Sem nota</option>
           ${listaNotas.map((n) => `
-            <option value="${n.id}" ${Number(v.nota_fiscal_id) === Number(n.id) ? 'selected' : ''}>
-              NF ${esc(n.numero || 'sem número')}${n.cliente ? ` - ${esc(n.cliente)}` : ''}${n.data ? ` (${dataCurta(n.data)})` : ''}
+            <option value="${n.id}" ${String(v.nota_fiscal_id) === String(n.id) ? 'selected' : ''}>
+              NF ${esc(n.numero || 'sem número')}${(n.cliente_atual || n.cliente) ? ` · ${esc(n.cliente_atual || n.cliente)}` : ''}${n.data ? ` (${dataCurta(n.data)})` : ''}
             </option>`).join('')}
         </select>
       </div>
@@ -4239,7 +3940,7 @@ async function formRecebivel(r, aoConcluir, base = {}) {
   });
   // Escolher a nota preenche o que estiver em branco.
   form.elements.nota_fiscal_id.onchange = () => {
-    const n = notas.find((x) => Number(x.id) === Number(form.elements.nota_fiscal_id.value));
+    const n = notas.find((x) => String(x.id) === String(form.elements.nota_fiscal_id.value));
     if (!n) return;
     if (!form.elements.cliente.value && n.cliente) form.elements.cliente.value = n.cliente;
     if (!form.elements.valor.value && n.valor_centavos) form.elements.valor.value = valorParaCampo(n.valor_centavos);
@@ -4315,7 +4016,8 @@ const ehPdf = (arquivo) => /\.pdf$/i.test(String(arquivo || ''));
 
 function itemNota(n) {
   const meta = [
-    `<span>${dataCurta(n.data)}</span>`,
+    `<span>Emissão ${dataCurta(n.data)}</span>`,
+    n.viagem_inicio ? `<span>Viagem ${dataCurta(n.viagem_inicio)}${n.viagem_fim ? ` a ${dataCurta(n.viagem_fim)}` : ''}</span>` : '',
     n.viagem_origem ? `<span>${esc(n.viagem_origem)} → ${esc(n.viagem_destino)}</span>` : '',
     ehAdmin() || Number(n.usuario_id) !== Number(estado.usuario.id) ? `<span>enviada por ${esc(n.enviado_por)}</span>` : '',
   ].filter(Boolean).join('<span class="separador-ponto">·</span>');
@@ -4324,15 +4026,16 @@ function itemNota(n) {
       <div class="icone-lancamento nota">${icone(ehPdf(n.arquivo) ? 'pdf' : 'nota')}</div>
       <div class="info-lancamento">
         <div class="topo-lancamento">
-          <span class="nome-lancamento">NF ${esc(n.numero || 'sem número')}${n.cliente ? ` - ${esc(n.cliente)}` : ''}</span>
+          <span class="nome-lancamento">NF ${esc(n.numero || 'sem número')}${(n.cliente_atual || n.cliente) ? ` · ${esc(n.cliente_atual || n.cliente)}` : ''}</span>
           ${n.placa ? `<span class="badge-placa">${esc(n.placa)}</span>` : ''}
           ${seloPrazo(n)}
-          ${ehAdmin() && n.recebivel_id ? '<span class="tag-status-visivel">No a receber</span>' : ''}
+
         </div>
         <div class="meta-lancamento">${meta}</div>
       </div>
       <div class="valor-lancamento">
         ${n.valor_centavos != null ? `<span class="quantia">${dinheiro(n.valor_centavos)}</span>` : ''}
+        ${seloCadastro(n)}
         <span class="seta-acao">${icone('setaDireita')}</span>
       </div>
     </div>`;
@@ -4398,7 +4101,7 @@ async function telaNotas(alvo) {
         <div class="lista">${notas.map(itemNota).join('')}</div>
       </div>`;
     aoTocar(caixa, '[data-nota]', (el) => {
-      abreNota(notas.find((n) => Number(n.id) === Number(el.dataset.nota)), atualiza);
+      abreNota(notas.find((n) => String(n.id) === String(el.dataset.nota)), atualiza);
     });
   };
 
@@ -4413,16 +4116,18 @@ async function telaNotas(alvo) {
   await atualiza();
 }
 
-function abreNota(n, aoConcluir) {
-  const url = endereco('comprovante', { arquivo: n.arquivo });
-  const pdf = ehPdf(n.arquivo);
+async function abreNota(n, aoConcluir) {
+  const local = Fila.ehLocal(n.arquivo) ? await Fila.arquivo(n.arquivo) : null;
+  const url = local ? URL.createObjectURL(local.blob) : endereco('comprovante', { arquivo: n.arquivo });
+  const pdf = ehPdf(local?.nome || n.arquivo);
   const linhas = [
     ['Número', n.numero || 'Sem número'],
-    ['Cliente', n.cliente],
+    ['Cliente', n.cliente_atual || n.cliente],
+    ['Período da viagem', n.viagem_inicio ? `${dataCurta(n.viagem_inicio)}${n.viagem_fim ? ` a ${dataCurta(n.viagem_fim)}` : ''}` : null],
     ['Emissão', dataCurta(n.data)],
     ['Valor', n.valor_centavos != null ? dinheiro(n.valor_centavos) : null],
     ['Viagem', n.viagem_origem ? `${n.viagem_origem} → ${n.viagem_destino}` : null],
-    ['Caminhão', n.placa ? `${n.placa}${n.caminhao_apelido ? ` - ${n.caminhao_apelido}` : ''}` : null],
+    ['Caminhão', n.placa ? `${n.placa}${n.caminhao_apelido ? ` · ${n.caminhao_apelido}` : ''}` : null],
     ['Enviada por', n.enviado_por],
     ['Observação', n.observacao],
   ].filter(([, v]) => v);
@@ -4447,13 +4152,12 @@ function abreNota(n, aoConcluir) {
       ${n.pode_alterar ? `
         <button class="btn perigo" type="button" data-excluir>Excluir</button>
         <button class="btn" type="button" data-editar>Editar</button>` : ''}
-      ${ehAdmin() ? (n.recebivel_id
-        ? '<button class="btn principal" type="button" data-ver-receber>Ver frete a receber</button>'
-        : `<button class="btn principal" type="button" data-criar-receber>${icone('aReceber')} Criar frete a receber</button>`) : ''}
+      ${n.viagem_id ? '<button class="btn principal" type="button" data-ver-viagem>Ver viagem</button>' : ''}
     </div>`);
 
+  if(local) elemento.closest('.janela').addEventListener('janela-fechada',()=>URL.revokeObjectURL(url),{once:true});
   vigiaPrazo(elemento, n);
-  elemento.querySelector('[data-editar]')?.addEventListener('click', () => { fechar(); formNota(n, aoConcluir); });
+  elemento.querySelector('[data-editar]')?.addEventListener('click', () => { formNota(n, aoConcluir); });
   elemento.querySelector('[data-excluir]')?.addEventListener('click', async () => {
     if (!confirm('Excluir esta nota fiscal? O arquivo também é apagado.')) return;
     try {
@@ -4466,86 +4170,30 @@ function abreNota(n, aoConcluir) {
     recado('Nota fiscal excluída.');
     await aoConcluir?.();
   });
-  elemento.querySelector('[data-criar-receber]')?.addEventListener('click', () => {
-    fechar();
-    formRecebivel(null, aoConcluir, {
-      cliente: n.cliente, valor_centavos: n.valor_centavos, data: n.data, viagem_id: n.viagem_id,
-      caminhao_id: n.caminhao_id, nota_fiscal_id: n.id, nota_numero: n.numero, nota_cliente: n.cliente,
-    });
-  });
-  elemento.querySelector('[data-ver-receber]')?.addEventListener('click', () => {
-    fechar();
-    abreRecebivel(n.recebivel_id, aoConcluir);
+  elemento.querySelector('[data-ver-viagem]')?.addEventListener('click', async () => {
+    try {
+      const viagens = await api('GET', 'viagens', { id: n.viagem_id });
+      const v = viagens.find((v) => String(v.id) === String(n.viagem_id));
+      if (!v) throw new Error('Viagem não encontrada.');
+      abreViagem(v, aoConcluir);
+    } catch (e) { recado(e.message); }
   });
 }
 
 // base: valores iniciais de uma nota nova (ex.: arquivo recebido pelo "Compartilhar").
 function formNota(n, aoConcluir, base = {}) {
-  const v = n || { data: hoje(), caminhao_id: estado.usuario.caminhao_padrao_id, ...base };
-  const { elemento, fechar } = janela(n ? 'Editar nota fiscal' : 'Enviar nota fiscal', `
-    <form class="form-pilha" novalidate>
-      ${campoArquivo('nf-arquivo', 'Foto ou PDF da nota',
-        'Tire uma foto nítida da nota inteira, ou escolha o PDF que o cliente mandou.',
-        'arquivo', v.arquivo, n ? 'Manter o arquivo atual' : 'Nenhum arquivo escolhido')}
-      <div class="linha duas">
-        <div class="campo opcional">
-          <label for="nf-numero">Número da nota</label>
-          <input id="nf-numero" name="numero" maxlength="40" value="${esc(v.numero || '')}">
-        </div>
-        <div class="campo">
-          <label for="nf-data">Data de emissão</label>
-          <input id="nf-data" name="data" type="date" required value="${esc(v.data || hoje())}">
-        </div>
-      </div>
-      <div class="campo opcional">
-        <label for="nf-cliente">Cliente</label>
-        <p class="dica">Nome da empresa ou pessoa da nota.</p>
-        <input id="nf-cliente" name="cliente" maxlength="90" value="${esc(v.cliente || '')}">
-      </div>
-      <div class="linha duas">
-        <div class="campo opcional">
-          <label for="nf-valor">Valor da nota</label>
-          <div class="valor-caixa">
-            <span aria-hidden="true">R$</span>
-            <input id="nf-valor" name="valor" inputmode="decimal" placeholder="0,00" value="${esc(valorParaCampo(v.valor_centavos))}">
-          </div>
-        </div>
-        <div class="campo opcional">
-          <label for="nf-caminhao">Caminhão</label>
-          <select id="nf-caminhao" name="caminhao_id">
-            ${opcoesCaminhao(v.caminhao_id, v.placa ? { id: v.caminhao_id, placa: v.placa, apelido: v.caminhao_apelido } : null)
-              .replace('Selecione o caminhão', 'Sem caminhão')}
-          </select>
-        </div>
-      </div>
-      <div class="campo opcional">
-        <label for="nf-viagem">Viagem</label>
-        <select id="nf-viagem" name="viagem_id">
-          ${opcoesViagem(v.viagem_id, v.viagem_origem
-            ? { id: v.viagem_id, origem: v.viagem_origem, destino: v.viagem_destino } : null).replace('Fora de viagem', 'Sem viagem')}
-        </select>
-      </div>
-      <div class="campo opcional">
-        <label for="nf-obs">Observação</label>
-        <textarea id="nf-obs" name="observacao" maxlength="500">${esc(v.observacao || '')}</textarea>
-      </div>
-      <div class="acoes fim">
-        <button class="btn" type="button" data-cancelar>Cancelar</button>
-        <button class="btn principal" type="submit">${n ? 'Salvar alterações' : 'Enviar nota'}</button>
-      </div>
-    </form>`);
-  const form = elemento.querySelector('form');
-  form.querySelector('[data-cancelar]').onclick = fechar;
-  ligaArquivo(form, 'nf-arquivo', 'arquivo', n ? 'Manter o arquivo atual' : 'Nenhum arquivo escolhido');
-  aoEnviar(form, async (dados) => {
-    if (!dados.arquivo) throw new Error('Anexe a foto ou o PDF da nota fiscal.');
-    const r = n ? await api('PUT', 'nota', { id: n.id }, dados) : await api('POST', 'notas', {}, dados);
-    fechar();
-    if (r?.offline) recado(GUARDADO_OFFLINE);
-    else if (n) recado('Nota fiscal atualizada.');
-    else if (ehAdmin()) recado('Nota fiscal guardada.');
-    else recado(`Nota enviada ao escritório. Se errou algo, dá para corrigir nos próximos ${MINUTOS_PARA_CORRIGIR} minutos.`);
-    await aoConcluir?.();
+  const v = n || { data:hoje(),caminhao_id:estado.usuario.caminhao_padrao_id,...base };
+  const {elemento,fechar}=janela(n ? 'Editar nota fiscal':'Anexar nota fiscal',`<form class="form-pilha form-nota-simples" novalidate>
+    ${campoArquivo('nf-arquivo','Foto ou PDF da nota','', 'arquivo',v.arquivo,n ? 'Manter arquivo atual':'Selecionar nota')}
+    <div class="campo"><label for="nf-numero">Número da nota (opcional)</label><input id="nf-numero" name="numero" maxlength="40" value="${esc(v.numero || '')}" placeholder="Número impresso na nota"></div>
+    <div class="acoes fim"><button class="btn" type="button" data-cancelar>Cancelar</button><button class="btn principal" type="submit">${n ? 'Salvar alterações':'Anexar nota'}</button></div></form>`);
+  const form=elemento.querySelector('form');form.querySelector('[data-cancelar]').onclick=fechar;
+  ligaArquivo(form,'nf-arquivo','arquivo',n ? 'Manter arquivo atual':'Selecionar nota');
+  aoEnviar(form,async (dados)=>{
+    if(!dados.arquivo) throw new Error('Escolha a foto ou o PDF da nota.');
+    const contexto={...dados,data:v.data || hoje(),cliente:v.cliente || '',viagem_id:v.viagem_id || '',caminhao_id:v.caminhao_id || '',valor:v.valor_centavos == null ? '' : valorParaCampo(v.valor_centavos),observacao:v.observacao || ''};
+    const r=n ? await api('PUT','nota',{id:n.id},contexto) : await api('POST','notas',{},contexto);
+    fechar();recado(r?.offline ? GUARDADO_OFFLINE:'Nota fiscal salva.');await aoConcluir?.();
   });
 }
 
@@ -4573,152 +4221,10 @@ function itemDiaria(d) {
         ${meta ? `<div class="meta-lancamento">${meta}</div>` : ''}
       </div>
       <div class="valor-lancamento">
-        <span class="quantia">${Number(d.valor_centavos) ? dinheiro(d.valor_centavos) : '<small>sem valor</small>'}</span>
+        <span class="quantia">${Number(d.valor_centavos) ? dinheiro(d.valor_centavos) : '<small>sem valor</small>'}</span>${seloCadastro(d)}
         <span class="seta-acao">${icone('setaDireita')}</span>
       </div>
     </div>`;
-}
-
-async function telaDiarias(alvo) {
-  const admin = ehAdmin();
-  const filtro = { mes: hoje().slice(0, 7), usuario_id: '' };
-  alvo.innerHTML = `
-    <div class="pilha">
-      <div class="titulo-secao">
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;width:100%">
-          <div>
-            <h1>${admin ? 'Diárias dos motoristas' : 'Minhas diárias'}</h1>
-            <p>${admin
-              ? 'Dias trabalhados por motorista, quanto vale a diária de cada um e o que falta pagar.'
-              : 'Registre os dias que você trabalhou e acompanhe quanto tem para receber.'}</p>
-          </div>
-          <button class="btn principal" type="button" id="b-nova-diaria">
-            ${icone('adicionar')} ${admin ? 'Lançar diárias' : 'Registrar dia trabalhado'}
-          </button>
-        </div>
-      </div>
-
-      <div class="cartao" style="padding:14px 16px">
-        <div class="barra-filtros-tela">
-          <div class="campo campo-mes">
-            <label for="d-mes">Mês</label>
-            <input id="d-mes" type="month" value="${filtro.mes}">
-          </div>
-          ${admin ? `
-            <div class="campo">
-              <label for="d-motorista">Motorista</label>
-              <select id="d-motorista">
-                <option value="">Todos os motoristas</option>
-                ${motoristasAtivos().map((u) => `<option value="${u.id}">${esc(u.nome)}</option>`).join('')}
-              </select>
-            </div>` : ''}
-        </div>
-      </div>
-
-      <div id="d-kpis"></div>
-      <div id="d-motoristas"></div>
-      <div id="d-lista"><p class="carregando">Carregando diárias…</p></div>
-    </div>`;
-
-  const atualiza = async () => {
-    const r = await api('GET', 'diarias', filtro);
-    const kpis = alvo.querySelector('#d-kpis');
-    if (admin) {
-      kpis.innerHTML = `
-        <div class="grade-kpis">
-          ${cartaoKpi('azul', 'calendario', 'Dias trabalhados', String(r.totais.dias),
-            `${r.motoristas.filter((m) => m.dias).length} motorista(s) em ${mesCurto(r.mes)}`)}
-          ${cartaoKpi('amarelo', 'saldo', 'Total do mês', dinheiro(r.totais.total_centavos), 'Soma das diárias do mês')}
-          ${cartaoKpi('verde', 'check', 'Já pago', dinheiro(r.totais.pago_centavos), 'Diárias quitadas', 'entrada')}
-          ${cartaoKpi('vermelho', 'gasto', 'Falta pagar', dinheiro(r.totais.pendente_centavos), 'Diárias pendentes do mês',
-            r.totais.pendente_centavos ? 'saida' : '')}
-        </div>`;
-    } else {
-      const m = r.motoristas[0] || { dias: 0, total_centavos: 0, pago_centavos: 0, pendente_centavos: 0 };
-      const deOutrosMeses = (m.pendente_geral_centavos || 0) - m.pendente_centavos;
-      kpis.innerHTML = `
-        <div class="grade-kpis">
-          ${cartaoKpi('azul', 'calendario', 'Dias trabalhados', String(m.dias), mesLongo(r.mes))}
-          ${cartaoKpi('amarelo', 'saldo', 'Valor da diária',
-            m.valor_diaria_centavos ? dinheiro(m.valor_diaria_centavos) : 'A combinar', 'Combinado com o escritório')}
-          ${cartaoKpi('verde', 'receber', 'Total do mês', dinheiro(m.total_centavos),
-            `${dinheiro(m.pago_centavos)} já pago`, 'entrada')}
-          ${cartaoKpi('vermelho', 'relogio', 'A receber', dinheiro(m.pendente_centavos), 'Diárias do mês ainda não pagas')}
-        </div>
-        ${deOutrosMeses > 0 ? `
-          <div class="aviso info" style="margin:12px 0 0">
-            Você ainda tem ${dinheiro(deOutrosMeses)} de diárias de outros meses para receber.
-          </div>` : ''}`;
-    }
-
-    const caixaMotoristas = alvo.querySelector('#d-motoristas');
-    if (admin && r.motoristas.length) {
-      caixaMotoristas.innerHTML = `
-        <div class="cartao">
-          <div class="secao-card-topo"><h2>Por motorista</h2></div>
-          <div class="lista-ajustes-entidades">
-            ${r.motoristas.map((m) => {
-              const outros = m.pendente_geral_centavos - m.pendente_centavos;
-              return `
-              <div class="item-ajustes-entidade">
-                <div style="display:flex;align-items:center;gap:12px;min-width:0">
-                  <div class="avatar-usuario-ajustes">${iniciais(m.nome)}</div>
-                  <div class="dados-entidade-ajustes">
-                    <strong>${esc(m.nome)}</strong>
-                    <small>${m.valor_diaria_centavos ? `Diária de ${dinheiro(m.valor_diaria_centavos)}` : 'Diária sem valor definido'}
-                      • ${m.dias} ${m.dias === 1 ? 'dia' : 'dias'} • ${dinheiro(m.total_centavos)}</small>
-                    <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
-                      ${m.pago_centavos ? `<span class="tag-status-visivel">Pago ${dinheiro(m.pago_centavos)}</span>` : ''}
-                      ${m.pendente_centavos ? `<span class="tag-status-pendente">A pagar ${dinheiro(m.pendente_centavos)}</span>` : ''}
-                      ${outros > 0 ? `<span class="tag-status-oculta">+ ${dinheiro(outros)} de outros meses</span>` : ''}
-                    </div>
-                  </div>
-                </div>
-                <div class="acoes-entidade-ajustes">
-                  <button class="btn pequeno" type="button" data-valor-diaria="${m.usuario_id}">
-                    ${icone('editar')} Editar diária
-                  </button>
-                  ${m.pendente_centavos ? `
-                    <button class="btn principal pequeno" type="button" data-pagar="${m.usuario_id}">
-                      ${icone('check')} Pagar ${dinheiro(m.pendente_centavos)}
-                    </button>` : ''}
-                </div>
-              </div>`;
-            }).join('')}
-          </div>
-        </div>`;
-      caixaMotoristas.querySelectorAll('[data-pagar]').forEach((b) => {
-        const m = r.motoristas.find((x) => Number(x.usuario_id) === Number(b.dataset.pagar));
-        const dias = r.itens.filter((d) => Number(d.usuario_id) === m.usuario_id && !d.pago).length;
-        b.onclick = () => formPagamentoDiarias(m, r.mes, dias, atualiza);
-      });
-      caixaMotoristas.querySelectorAll('[data-valor-diaria]').forEach((b) => {
-        const m = r.motoristas.find((x) => Number(x.usuario_id) === Number(b.dataset.valorDiaria));
-        b.onclick = () => formValorDiaria(m, atualiza);
-      });
-    } else {
-      caixaMotoristas.innerHTML = '';
-    }
-
-    const caixa = alvo.querySelector('#d-lista');
-    caixa.innerHTML = r.itens.length ? `
-      <div class="cartao" style="padding:12px 14px">
-        <div class="secao-card-topo" style="padding:4px 6px 0"><h2>Dias registrados</h2></div>
-        <div class="lista">${r.itens.map(itemDiaria).join('')}</div>
-      </div>` : `
-      <div class="vazio">
-        ${icone('calendario')}
-        <p style="margin-top:8px">Nenhuma diária registrada em ${mesLongo(r.mes)}.</p>
-      </div>`;
-    aoTocar(caixa, '[data-diaria]', (el) => {
-      abreDiaria(r.itens.find((d) => Number(d.id) === Number(el.dataset.diaria)), atualiza);
-    });
-  };
-
-  alvo.querySelector('#d-mes').onchange = (e) => { filtro.mes = e.target.value || hoje().slice(0, 7); atualiza(); };
-  alvo.querySelector('#d-motorista')?.addEventListener('change', (e) => { filtro.usuario_id = e.target.value; atualiza(); });
-  alvo.querySelector('#b-nova-diaria').onclick = () => formDiaria(null, atualiza);
-  await atualiza();
 }
 
 function abreDiaria(d, aoConcluir) {
@@ -4761,19 +4267,20 @@ function abreDiaria(d, aoConcluir) {
   });
 }
 
-function formDiaria(d, aoConcluir) {
+function formDiaria(d, aoConcluir, base = {}) {
   const admin = ehAdmin();
   const novo = !d;
   const motoristas = motoristasAtivos();
+  if(base.usuario_id && !motoristas.some((u)=>String(u.id)===String(base.usuario_id))) { const pessoa=estado.usuarios.find((u)=>String(u.id)===String(base.usuario_id)); if(pessoa) motoristas.unshift(pessoa); }
   if (admin && novo && !motoristas.length) {
     recado('Cadastre um motorista em Ajustes antes de lançar diárias.');
     return;
   }
   const diariaDe = (id) => {
-    const u = admin ? estado.usuarios.find((x) => Number(x.id) === Number(id)) : estado.usuario;
+    const u = admin ? estado.usuarios.find((x) => String(x.id) === String(id)) : estado.usuario;
     return u?.valor_diaria_centavos || null;
   };
-  const padrao = diariaDe(d?.usuario_id || motoristas[0]?.id);
+  const padrao = diariaDe(d?.usuario_id || base.usuario_id || motoristas[0]?.id);
 
   const { elemento, fechar } = janela(novo ? (admin ? 'Lançar diárias' : 'Registrar dia trabalhado') : 'Editar diária', `
     <form class="form-pilha" novalidate>
@@ -4788,20 +4295,20 @@ function formDiaria(d, aoConcluir) {
         <div class="campo">
           <label for="df-de">${novo ? 'Dia trabalhado' : 'Dia'}</label>
           <input id="df-de" name="${novo ? 'de' : 'data'}" type="date" required
-                 value="${esc(d?.data || hoje())}" ${admin ? '' : `max="${hoje()}"`}>
+                 value="${esc(d?.data || base.de || hoje())}" ${admin ? '' : `max="${hoje()}"`}>
         </div>
         ${novo ? `
           <div class="campo opcional">
             <label for="df-ate">Até o dia</label>
-            <input id="df-ate" name="ate" type="date" ${admin ? '' : `max="${hoje()}"`}>
+            <input id="df-ate" name="ate" type="date" value="${esc(base.ate || '')}" ${admin ? '' : `max="${hoje()}"`}>
             <p class="dica">Para registrar vários dias seguidos de uma vez.</p>
           </div>` : ''}
       </div>
       <div class="campo opcional">
         <label for="df-viagem">Viagem</label>
         <select id="df-viagem" name="viagem_id">
-          ${opcoesViagem(d?.viagem_id, d?.viagem_origem
-            ? { id: d.viagem_id, origem: d.viagem_origem, destino: d.viagem_destino } : null)}
+          ${opcoesViagem(d?.viagem_id || base.viagem_id, d?.viagem_origem
+            ? { id: d.viagem_id, origem: d.viagem_origem, destino: d.viagem_destino } : base.viagem_id ? {id:base.viagem_id,origem:base.viagem_origem || 'Viagem selecionada',destino:base.viagem_destino || ''}:null)}
         </select>
       </div>
       ${admin ? `
@@ -4825,6 +4332,7 @@ function formDiaria(d, aoConcluir) {
         <input id="df-obs" name="observacao" maxlength="200" value="${esc(d?.observacao || '')}"
                placeholder="Ex.: carregamento, espera na fila, folga trabalhada">
       </div>
+      ${novo ? `<details><summary>Escolher dias da semana</summary><div class="dias-semana">${['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'].map((nome,i) => `<label><input type="checkbox" name="dias_semana" value="${i}" checked>${nome}</label>`).join('')}</div></details><div class="resumo-lote" data-estimativa></div>`:''}
       <div class="acoes fim">
         <button class="btn" type="button" data-cancelar>Cancelar</button>
         <button class="btn principal" type="submit">${novo ? 'Registrar' : 'Salvar alterações'}</button>
@@ -4833,6 +4341,17 @@ function formDiaria(d, aoConcluir) {
 
   const form = elemento.querySelector('form');
   form.querySelector('[data-cancelar]').onclick = fechar;
+  if (base.usuario_id && form.elements.usuario_id) form.elements.usuario_id.value=base.usuario_id;
+  const estimativa = () => {
+    if (!novo) return;
+    const de=form.elements.de.value, ate=form.elements.ate.value || de;
+    const semana=[...form.querySelectorAll('[name=dias_semana]:checked')].map((c) => Number(c.value));
+    let dias=0; const fim=new Date(ate+'T12:00:00');
+    for(let d=new Date(de+'T12:00:00');d<=fim && dias<63;d.setDate(d.getDate()+1)) { if(semana.includes(d.getDay())) dias++; if(!semana.length) break; }
+    const valor=form.elements.valor?.value ? Number(form.elements.valor.value.replace(/\./g,'').replace(',','.'))*100 : diariaDe(form.elements.usuario_id?.value || estado.usuario.id);
+    form.querySelector('[data-estimativa]').textContent=`${dias} dia(s) selecionado(s)${valor ? ' · estimativa '+dinheiro(dias*valor):''}. Dias já cadastrados serão ignorados.`;
+  };
+  form.addEventListener('input',estimativa); estimativa();
   form.elements.usuario_id?.addEventListener('change', () => {
     const valor = diariaDe(form.elements.usuario_id.value);
     form.elements.valor.placeholder = valorParaCampo(valor) || '0,00';
@@ -4841,6 +4360,7 @@ function formDiaria(d, aoConcluir) {
       : 'Este motorista ainda não tem diária cadastrada em Ajustes.';
   });
   aoEnviar(form, async (dados) => {
+    if (novo) dados.dias_semana=[...form.querySelectorAll('[name=dias_semana]:checked')].map((c) => c.value);
     if (novo) {
       const r = await api('POST', 'diarias', {}, dados);
       if (r.offline) {
@@ -4937,7 +4457,7 @@ function formPagamentoDiarias(m, mes, dias, aoConcluir) {
         <label for="pg-categoria">Categoria do gasto</label>
         <select id="pg-categoria" name="categoria_id">
           ${gastos.map((c) => `
-            <option value="${c.id}" ${padrao && Number(padrao.id) === Number(c.id) ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
+            <option value="${c.id}" ${padrao && String(padrao.id) === String(c.id) ? 'selected' : ''}>${esc(c.nome)}</option>`).join('')}
         </select>
       </div>
       <div class="campo opcional">
@@ -4964,136 +4484,27 @@ function formPagamentoDiarias(m, mes, dias, aoConcluir) {
 // ---------------------------------------------------------------------------
 
 async function telaReceita(alvo) {
-  const atual = hoje().slice(0, 7);
-  const periodo = { de: atual, ate: atual };
-  alvo.innerHTML = `
-    <div class="pilha">
-      <div class="titulo-secao">
-        <h1>Receita da empresa</h1>
-        <p>Quanto a empresa recebeu de fretes. Aqui é só consulta: quem lança e corrige os valores é o proprietário.</p>
-      </div>
-
-      <div class="cartao painel-filtro-panorama-cartao">
-        <div class="grade-filtro-panorama-limpo">
-          <div class="campo campo-mes-de">
-            <label for="rc-de">Mês inicial</label>
-            <input id="rc-de" type="month" value="${periodo.de}">
-          </div>
-          <div class="campo campo-mes-ate">
-            <label for="rc-ate">Mês final</label>
-            <input id="rc-ate" type="month" value="${periodo.ate}">
-          </div>
-          <div class="campo acao-filtro-atalhos">
-            <label class="rotulo-invisivel-alinhamento">&nbsp;</label>
-            <button class="btn-icone-filtro-panorama" type="button" id="rc-atalhos" title="Atalhos rápidos de período">
-              ${icone('filtro')} <span>Atalhos</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div id="rc-painel"><p class="carregando">Carregando receita…</p></div>
-    </div>`;
-
-  const campoDe = alvo.querySelector('#rc-de');
-  const campoAte = alvo.querySelector('#rc-ate');
-
-  const atualiza = async () => {
-    if (periodo.de > periodo.ate) [periodo.de, periodo.ate] = [periodo.ate, periodo.de];
-    campoDe.value = periodo.de;
-    campoAte.value = periodo.ate;
-    const { de, ate } = periodo;
-    const painel = alvo.querySelector('#rc-painel');
-    painel.innerHTML = '<p class="carregando">Carregando receita…</p>';
-    const r = await api('GET', 'receita', { de, ate });
-    if (periodo.de !== de || periodo.ate !== ate) return;
-
-    const varios = de !== ate;
-    const diferenca = r.total_centavos - r.anterior_centavos;
-    const qtd = r.meses.reduce((s, m) => s + m.qtd, 0);
-    const comMovimento = r.meses.filter((m) => m.qtd > 0).length || 1;
-    painel.innerHTML = `
-      <div class="pilha">
-        <div class="card-hero-destaque">
-          <div class="cabecalho-hero">
-            <span class="subtitulo-hero">Receita recebida · ${esc(periodoLongo(de, ate))}</span>
-            <span class="tag-hero positivo">Somente consulta</span>
-          </div>
-          <div class="valor-hero positivo">${dinheiro(r.total_centavos)}</div>
-          <div class="variacao-hero">
-            ${r.anterior_centavos
-              ? `${diferenca >= 0 ? '▲' : '▼'} <strong>${dinheiro(Math.abs(diferenca))}</strong> ${diferenca >= 0 ? 'a mais' : 'a menos'} que em ${esc(periodoLongo(r.anterior_de, r.anterior_ate))}`
-              : `Sem receita em ${esc(periodoLongo(r.anterior_de, r.anterior_ate))} para comparar.`}
-          </div>
-          <div class="mini-grid-hero">
-            <div class="item-mini-hero">
-              <span class="rotulo">A receber dos clientes</span>
-              <span class="valor" style="color:#93c5fd">${dinheiro(r.a_receber.a_receber_centavos)}</span>
-            </div>
-            <div class="item-mini-hero">
-              <span class="rotulo">Fretes recebidos</span>
-              <span class="valor">${qtd}</span>
-            </div>
-            ${varios ? `
-              <div class="item-mini-hero">
-                <span class="rotulo">Média por mês</span>
-                <span class="valor" style="color:#34d399">${dinheiro(Math.round(r.total_centavos / comMovimento))}</span>
-              </div>` : ''}
-          </div>
-        </div>
-
-        ${varios ? `
-          <div class="cartao">
-            <h2 style="margin:0 0 12px">Mês a mês</h2>
-            ${barras(r.meses.map((m) => ({ ...m, nome: mesCurto(m.mes) })), (i) => esc(i.nome), 'entrada')}
-          </div>` : ''}
-
-        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:16px">
-          <div class="cartao">
-            <h2 style="margin:0 0 12px">Por tipo de frete</h2>
-            ${barras(r.por_categoria, (i) => esc(i.nome), 'entrada')}
-          </div>
-          <div class="cartao">
-            <h2 style="margin:0 0 12px">Por caminhão</h2>
-            ${barras(r.por_caminhao, (i) => esc(i.nome), 'entrada')}
-          </div>
-        </div>
-
-        <div class="cartao" style="padding:12px 14px">
-          <div class="secao-card-topo" style="padding:4px 6px 0"><h2>Fretes recebidos no período</h2></div>
-          ${r.itens.length
-            ? `<div class="lista">${r.itens.map((l) => itemLancamento({ ...l, tipo: 'entrada' }, true)).join('')}</div>`
-            : '<div class="vazio" style="padding:20px">Nenhum frete recebido no período.</div>'}
-        </div>
-      </div>`;
+  const atual=hoje().slice(0,7), d=new Date(Number(atual.slice(0,4)),Number(atual.slice(5,7))-2,1);
+  const anterior=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  let mes=atual, modo='linha', resposta, versao=0;
+  alvo.innerHTML=`<div class="pilha"><div class="titulo-secao"><h1>Receita da empresa</h1><p>Panorama financeiro da frota. Disponível somente para consulta.</p></div><div class="periodos-receita" role="group" aria-label="Mês da receita"><button type="button" class="btn" data-receita-mes="${atual}" aria-pressed="true">Mês atual · ${mesCurto(atual)}</button><button type="button" class="btn" data-receita-mes="${anterior}" aria-pressed="false">Mês anterior · ${mesCurto(anterior)}</button></div><div id="receita-painel"></div></div>`;
+  const desenha=()=>{
+    const r=resposta, p=alvo.querySelector('#receita-painel');
+    p.innerHTML=`<div class="pilha"><div class="card-hero-destaque"><div class="cabecalho-hero"><span class="subtitulo-hero">Receita recebida · ${mesLongo(mes)}</span><span class="tag-hero positivo">Somente leitura</span></div><div class="valor-hero positivo">${dinheiro(r.atual.entradas_centavos)}</div><div class="mini-grid-hero"><div class="item-mini-hero"><span class="rotulo">Despesas</span><span class="valor">${dinheiro(r.atual.saidas_centavos)}</span></div><div class="item-mini-hero"><span class="rotulo">Saldo do mês</span><span class="valor">${dinheiro(r.atual.saldo_centavos)}</span></div><div class="item-mini-hero"><span class="rotulo">Pendente a receber</span><span class="valor">${dinheiro(r.a_receber.a_receber_centavos)}</span><small>Todos os meses</small></div></div></div>
+    <div class="grade-kpis">${cartaoKpi('azul','caminhao','Viagens em andamento',String(r.viagens_abertas),'Operação atual')}${cartaoKpi('amarelo','combustivel','Combustível',dinheiro(r.combustivel_centavos),`${numero(r.litros)} litros no mês`)}</div>
+    <div class="cartao painel-grafico"><div class="topo-grafico"><h2>Movimentação do mês</h2><div class="seletor-grafico" role="group" aria-label="Visualização do gráfico">${[['linha','Linha'],['barras','Barras'],['pizza','Pizza']].map(([id,nome])=>`<button type="button" data-modo-receita="${id}" aria-pressed="${id===modo}">${nome}</button>`).join('')}</div></div>${desenhaGraficoPorModo(r,false,mes,mes,modo)}</div>
+    <div class="cartao"><h2>Performance por caminhão</h2>${tabelaCaminhoes(r.por_caminhao)}</div><div class="cartao"><h2>Entradas por frete</h2>${barras(r.entradas_por_categoria,(i)=>esc(i.nome),'entrada')}</div></div>`;
+    ajustaPainel(p);
+    p.querySelectorAll('[data-modo-receita]').forEach((b)=>b.onclick=()=>{modo=b.dataset.modoReceita;desenha();});
   };
-
-  campoDe.onchange = () => { periodo.de = campoDe.value || atual; atualiza(); };
-  campoAte.onchange = () => { periodo.ate = campoAte.value || atual; atualiza(); };
-  alvo.querySelector('#rc-atalhos').onclick = () => {
-    const atalhos = atalhosPeriodo();
-    const { elemento, fechar } = janela('Atalhos de Período', `
-      <div class="lista-atalhos-periodo">
-        ${atalhos.map((a, i) => `
-          <button type="button" class="item-atalho-periodo ${a.de === periodo.de && a.ate === periodo.ate ? 'ativo' : ''}" data-idx-atalho="${i}">
-            <strong>${esc(a.nome)}</strong>
-            <small style="color:var(--tinta-3)">${mesCurto(a.de)}${a.de !== a.ate ? ` → ${mesCurto(a.ate)}` : ''}</small>
-          </button>`).join('')}
-      </div>`);
-    elemento.querySelectorAll('[data-idx-atalho]').forEach((b) => {
-      b.onclick = () => {
-        Object.assign(periodo, atalhos[Number(b.dataset.idxAtalho)]);
-        fechar();
-        atualiza();
-      };
-    });
-  };
-  await atualiza();
+  const carrega=async()=>{const vez=++versao;alvo.querySelector('#receita-painel').innerHTML='<p class="carregando">Carregando panorama…</p>';const r=await api('GET','receita',{mes});if(vez!==versao)return;resposta=r;desenha();};
+  alvo.querySelectorAll('[data-receita-mes]').forEach((b)=>b.onclick=()=>{mes=b.dataset.receitaMes;alvo.querySelectorAll('[data-receita-mes]').forEach((x)=>x.setAttribute('aria-pressed',String(x===b)));carrega().catch((e)=>recado(e.message));});
+  await carrega();
 }
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker
-    .register(`sw.js?v=${encodeURIComponent(window.VERSAO_APP || '')}`, { updateViaCache: 'none' })
+    .register(`sw.js?v=${encodeURIComponent(window.VERSAO_APP || '')}&ambiente=${encodeURIComponent(window.FROTA_AMBIENTE || 'padrao')}`, { updateViaCache: 'none' })
     .catch(() => {});
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (!estado.usuario) return;

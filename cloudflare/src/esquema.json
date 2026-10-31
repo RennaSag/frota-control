@@ -1,0 +1,121 @@
+{
+    "tabelas": [
+        "CREATE TABLE IF NOT EXISTS usuarios (\r\n        id          SERIAL PRIMARY KEY,\r\n        nome        VARCHAR(80)  NOT NULL,\r\n        usuario     VARCHAR(40)  NOT NULL,\r\n        senha_hash  VARCHAR(255) NOT NULL,\r\n        papel       VARCHAR(12)  NOT NULL,\r\n        telefone    VARCHAR(30)      NULL,\r\n        caminhao_padrao_id    INTEGER      NULL,\r\n        valor_diaria_centavos BIGINT NULL,\r\n        ativo       SMALLINT      NOT NULL,\r\n        criado_em   TIMESTAMP    NOT NULL,\r\n        UNIQUE (usuario))",
+        "CREATE TABLE IF NOT EXISTS caminhoes (\r\n        id        SERIAL PRIMARY KEY,\r\n        placa     VARCHAR(10) NOT NULL,\r\n        apelido   VARCHAR(60)     NULL,\r\n        ativo     SMALLINT     NOT NULL,\r\n        criado_em TIMESTAMP   NOT NULL,\r\n        UNIQUE (placa))",
+        "CREATE TABLE IF NOT EXISTS categorias (\r\n        id             SERIAL PRIMARY KEY,\r\n        nome           VARCHAR(40) NOT NULL,\r\n        tipo           VARCHAR(10) NOT NULL,\r\n        icone          VARCHAR(20) NOT NULL,\r\n        pede_litros    SMALLINT     NOT NULL,\r\n        pede_descricao SMALLINT     NOT NULL,\r\n        oculta_motorista SMALLINT   NOT NULL DEFAULT 0,\r\n        ordem          INT         NOT NULL,\r\n        ativo          SMALLINT     NOT NULL,\r\n        UNIQUE (nome, tipo))",
+        "CREATE TABLE IF NOT EXISTS clientes (\r\n        id SERIAL PRIMARY KEY,\r\n        nome VARCHAR(90) NOT NULL UNIQUE,\r\n        telefone VARCHAR(30) NULL,\r\n        documento VARCHAR(30) NULL,\r\n        email VARCHAR(120) NULL,\r\n        observacao VARCHAR(500) NULL,\r\n        ativo SMALLINT NOT NULL DEFAULT 1,\r\n        criado_em TIMESTAMP NOT NULL,\r\n        atualizado_em TIMESTAMP NULL)",
+        "CREATE TABLE IF NOT EXISTS viagens (\r\n        id          SERIAL PRIMARY KEY,\r\n        usuario_id  INTEGER        NOT NULL,\r\n        caminhao_id INTEGER            NULL,\r\n        origem      VARCHAR(80) NOT NULL,\r\n        destino     VARCHAR(80) NOT NULL,\r\n        inicio      DATE       NOT NULL,\r\n        fim         DATE           NULL,\r\n        km_inicial  INT             NULL,\r\n        km_final    INT             NULL,\r\n        status      VARCHAR(10) NOT NULL,\r\n        observacao  VARCHAR(500)    NULL,\r\n        criado_em   TIMESTAMP   NOT NULL,\r\n        FOREIGN KEY (usuario_id)  REFERENCES usuarios(id),\r\n        FOREIGN KEY (caminhao_id) REFERENCES caminhoes(id))",
+        "CREATE TABLE IF NOT EXISTS lancamentos (\r\n        id             SERIAL PRIMARY KEY,\r\n        tipo           VARCHAR(10)  NOT NULL,\r\n        usuario_id     INTEGER         NOT NULL,\r\n        viagem_id      INTEGER             NULL,\r\n        caminhao_id    INTEGER             NULL,\r\n        categoria_id   INTEGER         NOT NULL,\r\n        descricao      VARCHAR(140)     NULL,\r\n        valor_centavos BIGINT    NOT NULL,\r\n        litros         NUMERIC(12,3)         NULL,\r\n        km             INT              NULL,\r\n        data           DATE        NOT NULL,\r\n        pagamento      VARCHAR(30)      NULL,\r\n        lugar          VARCHAR(90)      NULL,\r\n        cliente        VARCHAR(90)      NULL,\r\n        observacao     VARCHAR(500)     NULL,\r\n        comprovante    VARCHAR(120)     NULL,\r\n        recebivel_id   INTEGER             NULL,\r\n        criado_em      TIMESTAMP    NOT NULL,\r\n        criado_por     INTEGER             NULL,\r\n        atualizado_em  TIMESTAMP        NULL,\r\n        atualizado_por INTEGER             NULL,\r\n        FOREIGN KEY (usuario_id)   REFERENCES usuarios(id),\r\n        FOREIGN KEY (categoria_id) REFERENCES categorias(id),\r\n        FOREIGN KEY (caminhao_id)  REFERENCES caminhoes(id),\r\n        FOREIGN KEY (viagem_id)    REFERENCES viagens(id))",
+        "CREATE TABLE IF NOT EXISTS notas_fiscais (\r\n        id             SERIAL PRIMARY KEY,\r\n        usuario_id     INTEGER         NOT NULL,\r\n        numero         VARCHAR(40)      NULL,\r\n        cliente        VARCHAR(90)      NULL,\r\n        data           DATE        NOT NULL,\r\n        valor_centavos BIGINT        NULL,\r\n        viagem_id      INTEGER             NULL,\r\n        caminhao_id    INTEGER             NULL,\r\n        arquivo        VARCHAR(120) NOT NULL,\r\n        observacao     VARCHAR(500)     NULL,\r\n        criado_em      TIMESTAMP    NOT NULL,\r\n        atualizado_em  TIMESTAMP        NULL,\r\n        FOREIGN KEY (usuario_id)  REFERENCES usuarios(id),\r\n        FOREIGN KEY (viagem_id)   REFERENCES viagens(id),\r\n        FOREIGN KEY (caminhao_id) REFERENCES caminhoes(id))",
+        "CREATE TABLE IF NOT EXISTS recebiveis (\r\n        id             SERIAL PRIMARY KEY,\r\n        cliente        VARCHAR(90)  NOT NULL,\r\n        descricao      VARCHAR(140)     NULL,\r\n        categoria_id   INTEGER         NOT NULL,\r\n        valor_centavos BIGINT    NOT NULL,\r\n        data           DATE        NOT NULL,\r\n        vencimento     DATE            NULL,\r\n        viagem_id      INTEGER             NULL,\r\n        caminhao_id    INTEGER             NULL,\r\n        nota_fiscal_id INTEGER             NULL,\r\n        observacao     VARCHAR(500)     NULL,\r\n        criado_em      TIMESTAMP    NOT NULL,\r\n        criado_por     INTEGER             NULL,\r\n        FOREIGN KEY (categoria_id)   REFERENCES categorias(id),\r\n        FOREIGN KEY (viagem_id)      REFERENCES viagens(id),\r\n        FOREIGN KEY (caminhao_id)    REFERENCES caminhoes(id),\r\n        FOREIGN KEY (nota_fiscal_id) REFERENCES notas_fiscais(id))",
+        "CREATE TABLE IF NOT EXISTS diarias (\r\n        id             SERIAL PRIMARY KEY,\r\n        usuario_id     INTEGER         NOT NULL,\r\n        data           DATE        NOT NULL,\r\n        valor_centavos BIGINT    NOT NULL,\r\n        viagem_id      INTEGER             NULL,\r\n        observacao     VARCHAR(200)     NULL,\r\n        lancamento_id  INTEGER             NULL,\r\n        criado_em      TIMESTAMP    NOT NULL,\r\n        criado_por     INTEGER             NULL,\r\n        UNIQUE (usuario_id, data),\r\n        FOREIGN KEY (usuario_id) REFERENCES usuarios(id),\r\n        FOREIGN KEY (viagem_id)  REFERENCES viagens(id))",
+        "CREATE TABLE IF NOT EXISTS avisos (\r\n        id            SERIAL PRIMARY KEY,\r\n        usuario_id    INTEGER         NOT NULL,\r\n        acao          VARCHAR(12)  NOT NULL,\r\n        tipo          VARCHAR(10)  NOT NULL,\r\n        lancamento_id INTEGER             NULL,\r\n        resumo        VARCHAR(200) NOT NULL,\r\n        para_usuario_id INTEGER           NULL,\r\n        criado_em     TIMESTAMP    NOT NULL,\r\n        FOREIGN KEY (usuario_id) REFERENCES usuarios(id))",
+        "CREATE TABLE IF NOT EXISTS esquema (\r\n        versao INT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS avisos_vistos (\r\n        usuario_id INTEGER NOT NULL PRIMARY KEY,\r\n        ultimo_id  INT  NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS tentativas_login (\r\n        chave VARCHAR(120) NOT NULL PRIMARY KEY,\r\n        n     INT          NOT NULL,\r\n        desde TIMESTAMP    NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS inscricoes_push (\r\n        id            SERIAL PRIMARY KEY,\r\n        usuario_id    INTEGER         NOT NULL,\r\n        endpoint_hash VARCHAR(64)  NOT NULL,\r\n        endpoint      TEXT         NOT NULL,\r\n        p256dh        VARCHAR(120) NOT NULL,\r\n        auth          VARCHAR(60)  NOT NULL,\r\n        criado_em     TIMESTAMP    NOT NULL,\r\n        UNIQUE (endpoint_hash))",
+        "CREATE TABLE IF NOT EXISTS envios_fila (\r\n        id         VARCHAR(40) NOT NULL PRIMARY KEY,\r\n        usuario_id INTEGER        NOT NULL,\r\n        resposta   TEXT            NULL,\r\n        criado_em  TIMESTAMP   NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS configuracoes (\r\n        chave VARCHAR(40) NOT NULL PRIMARY KEY,\r\n        valor TEXT        NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS sessoes (\r\n            id     VARCHAR(128) NOT NULL PRIMARY KEY,\r\n            dados  TEXT         NOT NULL,\r\n            expira BIGINT       NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS comprovantes (\r\n            nome      VARCHAR(120) NOT NULL PRIMARY KEY,\r\n            dados     BYTEA        NOT NULL,\r\n            criado_em TIMESTAMP    NOT NULL)"
+    ],
+    "indices": [
+        "CREATE INDEX idx_lanc_data ON lancamentos (data)",
+        "CREATE INDEX idx_lanc_tipo ON lancamentos (tipo, data)",
+        "CREATE INDEX idx_lanc_usuario ON lancamentos (usuario_id)",
+        "CREATE INDEX idx_lanc_viagem ON lancamentos (viagem_id)",
+        "CREATE INDEX idx_viagem_usuario ON viagens (usuario_id)",
+        "CREATE INDEX idx_viagem_cliente ON viagens (cliente_id)",
+        "CREATE INDEX idx_lanc_recebivel ON lancamentos (recebivel_id)",
+        "CREATE INDEX idx_nota_usuario ON notas_fiscais (usuario_id)",
+        "CREATE INDEX idx_diaria_data ON diarias (data)",
+        "CREATE INDEX idx_push_usuario ON inscricoes_push (usuario_id)"
+    ],
+    "colunas": [
+        [
+            "clientes",
+            "cep",
+            "VARCHAR(12) NULL"
+        ],
+        [
+            "clientes",
+            "logradouro",
+            "VARCHAR(140) NULL"
+        ],
+        [
+            "clientes",
+            "numero",
+            "VARCHAR(20) NULL"
+        ],
+        [
+            "clientes",
+            "complemento",
+            "VARCHAR(90) NULL"
+        ],
+        [
+            "clientes",
+            "bairro",
+            "VARCHAR(80) NULL"
+        ],
+        [
+            "clientes",
+            "cidade",
+            "VARCHAR(80) NULL"
+        ],
+        [
+            "clientes",
+            "uf",
+            "VARCHAR(2) NULL"
+        ],
+        [
+            "viagens",
+            "criado_por",
+            "INTEGER NULL"
+        ],
+        [
+            "viagens",
+            "cliente_id",
+            "INTEGER NULL REFERENCES clientes(id)"
+        ],
+        [
+            "viagens",
+            "atualizado_em",
+            "TIMESTAMP NULL"
+        ],
+        [
+            "viagens",
+            "nota_fiscal_numero",
+            "VARCHAR(40) NULL"
+        ],
+        [
+            "categorias",
+            "criado_em",
+            "TIMESTAMP NULL"
+        ],
+        [
+            "usuarios",
+            "caminhao_padrao_id",
+            "INTEGER NULL"
+        ],
+        [
+            "usuarios",
+            "valor_diaria_centavos",
+            "BIGINT NULL"
+        ],
+        [
+            "categorias",
+            "oculta_motorista",
+            "SMALLINT NOT NULL DEFAULT 0"
+        ],
+        [
+            "lancamentos",
+            "recebivel_id",
+            "INTEGER NULL"
+        ],
+        [
+            "avisos",
+            "para_usuario_id",
+            "INTEGER NULL"
+        ]
+    ]
+}

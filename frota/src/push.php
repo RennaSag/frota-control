@@ -190,6 +190,8 @@ function agendaPush(array $usuarioIds, string $texto): void
     if ($fila === null) {
         $fila = [];
         register_shutdown_function(function () use (&$fila) {
+            // Uma gravação rejeitada ou desfeita não pode gerar aviso de sucesso.
+            if (http_response_code() >= 400) return;
             if (function_exists('fastcgi_finish_request')) {
                 fastcgi_finish_request();
             } else {

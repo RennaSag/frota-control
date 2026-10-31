@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/viagens_clientes.php';
+
 const SQL_LANCAMENTO = '
     SELECT l.*, c.nome AS categoria, c.icone, c.tipo AS categoria_tipo,
            c.pede_litros, c.pede_descricao,
@@ -14,7 +16,11 @@ const SQL_LANCAMENTO = '
       LEFT JOIN recebiveis rb ON rb.id = l.recebivel_id';
 
 const SQL_VIAGEM = '
-    SELECT v.*, u.nome AS motorista, cm.placa, cm.apelido AS caminhao_apelido,
+    SELECT v.*, cl.nome AS cliente, u.nome AS motorista, cm.placa, cm.apelido AS caminhao_apelido,
+           (SELECT COALESCE(SUM(rb.valor_centavos), 0) FROM recebiveis rb WHERE rb.viagem_id = v.id) AS valor_frete_centavos,
+           (SELECT COALESCE(SUM(l.valor_centavos), 0) FROM lancamentos l WHERE l.tipo = \'entrada\'
+             AND (l.viagem_id = v.id OR l.recebivel_id IN (SELECT rb.id FROM recebiveis rb WHERE rb.viagem_id = v.id))) AS recebido_centavos,
+           (SELECT COUNT(*) FROM notas_fiscais n WHERE n.viagem_id = v.id) AS qtd_notas,
            (SELECT COALESCE(SUM(l.valor_centavos), 0) FROM lancamentos l
              WHERE l.viagem_id = v.id AND l.tipo = \'saida\') AS saidas_centavos,
            (SELECT COALESCE(SUM(l.valor_centavos), 0) FROM lancamentos l
@@ -22,7 +28,8 @@ const SQL_VIAGEM = '
            (SELECT COUNT(*) FROM lancamentos l WHERE l.viagem_id = v.id) AS qtd_lancamentos
       FROM viagens v
       JOIN usuarios u ON u.id = v.usuario_id
-      LEFT JOIN caminhoes cm ON cm.id = v.caminhao_id';
+      LEFT JOIN caminhoes cm ON cm.id = v.caminhao_id
+      LEFT JOIN clientes cl ON cl.id = v.cliente_id';
 
 const PAGAMENTOS = ['Dinheiro', 'Cartão da empresa', 'Pix', 'Cartão frete', 'Boleto', 'Do próprio bolso'];
 
@@ -37,6 +44,8 @@ function despacha(string $r, string $metodo)
             return ['ok' => true];
         case 'GET eu':
             return exigeLogin();
+        case 'POST meu-caminhao':
+            return rotaMeuCaminhao();
         case 'POST trocar-senha':
             return rotaTrocarSenha();
 
@@ -53,7 +62,7 @@ function despacha(string $r, string $metodo)
             exigeLogin();
             $todos = ehAdmin() && ($q['todos'] ?? '') === '1';
             return todas(
-                'SELECT id, placa, apelido, ativo FROM caminhoes '
+                'SELECT id, placa, apelido, ativo, criado_em FROM caminhoes '
                 . ($todos ? '' : 'WHERE ativo = 1 ') . 'ORDER BY ativo DESC, placa'
             );
         case 'POST caminhoes':
@@ -67,6 +76,8 @@ function despacha(string $r, string $metodo)
             return rotaCategorias();
         case 'POST categorias':
             return rotaNovaCategoria();
+        case 'PUT categorias-ordem':
+            return rotaOrdemCategorias();
         case 'PUT categoria':
             return rotaEditaCategoria(campoId($q['id'] ?? null, 'Categoria', true));
         case 'DELETE categoria':
@@ -74,15 +85,27 @@ function despacha(string $r, string $metodo)
 
         case 'GET viagens':
             return rotaViagens();
+        case 'GET viagens-financeiro':
+            return resumoFinanceiroViagens();
+        case 'GET clientes':
+            return rotaClientes();
+        case 'POST clientes':
+            return salvaCliente();
+        case 'PUT cliente':
+            return salvaCliente(campoId($q['id'] ?? null, 'Cliente', true));
+        case 'POST viagem-pagamento':
+            return viagemComPagamento(campoId($q['id'] ?? null, 'Viagem', true));
         case 'POST viagens':
-            return rotaNovaViagem();
+            return viagemComCadastro();
         case 'PUT viagem':
-            return rotaEditaViagem(campoId($q['id'] ?? null, 'Viagem', true));
+            return viagemComEdicao(campoId($q['id'] ?? null, 'Viagem', true));
         case 'POST viagem-encerrar':
-            return rotaEncerraViagem(campoId($q['id'] ?? null, 'Viagem', true));
+            return viagemComEncerramento(campoId($q['id'] ?? null, 'Viagem', true));
         case 'DELETE viagem':
-            exigeAdmin();
+            $eu = exigeLogin();
             $id = campoId($q['id'] ?? null, 'Viagem', true);
+            $v = viagemAcessivel($id);
+            exigePrazoDoMotorista($eu, $v, 'criado_por', 'esta viagem');
             foreach (['lancamentos', 'recebiveis', 'notas_fiscais', 'diarias'] as $tabela) {
                 consulta("UPDATE $tabela SET viagem_id = NULL WHERE viagem_id = ?", [$id]);
             }
@@ -156,11 +179,11 @@ function despacha(string $r, string $metodo)
         case 'POST diarias':
             return rotaNovasDiarias();
         case 'PUT diaria':
-            return rotaEditaDiaria(campoId($q['id'] ?? null, 'Diária', true));
+            return transacaoViagem(fn () => rotaEditaDiaria(campoId($q['id'] ?? null, 'Diária', true)));
         case 'DELETE diaria':
-            return rotaExcluiDiaria(campoId($q['id'] ?? null, 'Diária', true));
+            return transacaoViagem(fn () => rotaExcluiDiaria(campoId($q['id'] ?? null, 'Diária', true)));
         case 'POST diarias-pagar':
-            return rotaPagaDiarias();
+            return transacaoViagem(fn () => rotaPagaDiarias());
         case 'PUT diaria-valor':
             return rotaValorDiaria(campoId($q['usuario_id'] ?? null, 'Motorista', true));
     }
@@ -256,7 +279,7 @@ function rotaNovoUsuario(): array
         'papel' => $papel,
         'telefone' => campoTexto($corpo['telefone'] ?? null, 'Telefone', false, 30),
         'ativo' => 1,
-        'criado_em' => agora(),
+        'criado_em' => instanteCadastro(),
     ] + camposExtrasUsuario($corpo));
     return ['id' => $id];
 }
@@ -345,7 +368,7 @@ function rotaNovoCaminhao(): array
         'placa' => $placa,
         'apelido' => campoTexto($corpo['apelido'] ?? null, 'Apelido', false, 60),
         'ativo' => 1,
-        'criado_em' => agora(),
+        'criado_em' => instanteCadastro(),
     ])];
 }
 
@@ -435,12 +458,13 @@ function rotaNovaCategoria(): array
     return ['id' => insere('categorias', [
         'nome' => $nome,
         'tipo' => $tipo,
-        'icone' => $tipo === 'entrada' ? 'plus' : 'tag',
-        'pede_litros' => 0,
-        'pede_descricao' => 0,
+        'icone' => campoTexto($corpo['icone'] ?? 'tag', 'Ícone', true, 40),
+        'pede_litros' => $tipo === 'saida' ? campoSimNao($corpo['pede_litros'] ?? null, false) : 0,
+        'pede_descricao' => campoSimNao($corpo['pede_descricao'] ?? null, false),
         'oculta_motorista' => $tipo === 'saida' ? campoSimNao($corpo['oculta_motorista'] ?? null, false) : 0,
         'ordem' => 500,
         'ativo' => 1,
+        'criado_em' => instanteCadastro(),
     ])];
 }
 
@@ -467,7 +491,12 @@ function rotaEditaCategoria(int $id): array
     if ($igual !== null) {
         throw new ErroDeUso('Já existe uma categoria com esse nome.');
     }
+    $litros = $tipo === 'saida' ? campoSimNao($corpo['pede_litros'] ?? null, (bool) $cat['pede_litros']) : 0;
+    if ($litros !== (int) $cat['pede_litros'] && qtdLancamentosDaCategoria($id) > 0) throw new ErroDeUso('O controle de abastecimento não pode mudar em uma categoria com lançamentos.');
     atualiza('categorias', $id, [
+        'icone' => campoTexto($corpo['icone'] ?? $cat['icone'], 'Ícone', true, 40),
+        'pede_litros' => $litros,
+        'pede_descricao' => campoSimNao($corpo['pede_descricao'] ?? null, (bool) $cat['pede_descricao']),
         'nome' => $nome,
         'tipo' => $tipo,
         'ativo' => campoSimNao($corpo['ativo'] ?? null),
@@ -476,6 +505,27 @@ function rotaEditaCategoria(int $id): array
             : 0,
     ]);
     return ['ok' => true];
+}
+
+function rotaOrdemCategorias(): array
+{
+    exigeAdmin();
+    $corpo = corpoJson();
+    $tipo = $corpo['tipo'] ?? '';
+    $ids = $corpo['ids'] ?? null;
+    if (!in_array($tipo, ['entrada','saida'], true) || !is_array($ids) || !$ids || count($ids)>500) throw new ErroDeUso('Informe a ordem das categorias.');
+    $ids = array_map(fn($id) => campoId($id, 'Categoria', true), $ids);
+    if (count(array_unique($ids)) !== count($ids)) throw new ErroDeUso('A ordem contém categorias repetidas.');
+    $pdo=banco(); $propria=!$pdo->inTransaction();
+    if($propria)$pdo->beginTransaction();
+    try {
+        $linhas=todas('SELECT id FROM categorias WHERE tipo = ?' . (BANCO==='sqlite'?'':' FOR UPDATE'),[$tipo]);
+        $atuais=array_map(fn($c)=>(int)$c['id'],$linhas);$comparar=$ids;sort($atuais);sort($comparar);
+        if($atuais!==$comparar)throw new ErroDeUso('As categorias mudaram. Atualize a lista e tente novamente.',409);
+        foreach($ids as $ordem=>$id)atualiza('categorias',$id,['ordem'=>$ordem+1]);
+        if($propria)$pdo->commit();
+    }catch(Throwable $e){if($propria && $pdo->inTransaction())$pdo->rollBack();throw $e;}
+    return ['ok'=>true];
 }
 
 function rotaExcluiCategoria(int $id): array
@@ -499,7 +549,7 @@ function rotaExcluiCategoria(int $id): array
 
 // O motorista só pode corrigir ou apagar o que ele mesmo registrou, e só nos primeiros minutos.
 // Depois disso, só o proprietário altera.
-const MINUTOS_PARA_CORRIGIR = 5;
+const MINUTOS_PARA_CORRIGIR = 2;
 
 function segundosParaCorrigir($criadoEm): int
 {
@@ -563,6 +613,14 @@ function rotaViagens(): array
     $eu = exigeLogin();
     $cond = [];
     $args = [];
+    if (!empty($_GET['cliente_id'])) {
+        $cond[] = 'v.cliente_id = ?';
+        $args[] = campoId($_GET['cliente_id'], 'Cliente', true);
+    }
+    if (!empty($_GET['id'])) {
+        $cond[] = 'v.id = ?';
+        $args[] = campoId($_GET['id'], 'Viagem', true);
+    }
     if ($eu['papel'] !== 'admin') {
         $cond[] = 'v.usuario_id = ?';
         $args[] = $eu['id'];
@@ -576,7 +634,7 @@ function rotaViagens(): array
     }
     [$limite, $offset] = paginacao($_GET);
     $where = $cond ? 'WHERE ' . implode(' AND ', $cond) : '';
-    return array_map(fn ($v) => anotaPrazo($eu, $v, 'usuario_id'), todas(
+    return array_map(fn ($v) => anotaPrazo($eu, $v, 'criado_por'), todas(
         SQL_VIAGEM . " $where
           ORDER BY CASE WHEN v.status = 'aberta' THEN 0 ELSE 1 END, v.inicio DESC, v.id DESC
           LIMIT $limite OFFSET $offset",
@@ -600,7 +658,8 @@ function rotaNovaViagem(): array
         'km_inicial' => campoNumero($corpo['km_inicial'] ?? null, 'Km inicial', 9999999, true),
         'status' => 'aberta',
         'observacao' => campoTexto($corpo['observacao'] ?? null, 'Observação', false, 500),
-        'criado_em' => agora(),
+        'criado_em' => instanteCadastro(),
+        'criado_por' => $eu['id'],
     ];
     $id = insere('viagens', $dados);
     $resumo = $dados['origem'] . ' → ' . $dados['destino'] . ' · saída ' . pdfData($dados['inicio']);
@@ -615,7 +674,7 @@ function rotaEditaViagem(int $id): array
 {
     $eu = exigeLogin();
     $atual = viagemAcessivel($id);
-    exigePrazoDoMotorista($eu, $atual, 'usuario_id', 'esta viagem');
+    exigePrazoDoMotorista($eu, $atual, 'criado_por', 'esta viagem');
     $corpo = corpoJson();
     $inicio = campoData($corpo['inicio'] ?? null, 'Data de saída');
     $fim = campoData($corpo['fim'] ?? null, 'Data de chegada', false);
@@ -705,12 +764,13 @@ function filtrosLancamento(): array
             $args[] = campoId($_GET[$campo], $rotulo);
         }
     }
-    $busca = campoTexto($_GET['busca'] ?? null, 'Busca', false, 60);
+    $busca = campoTexto($_GET['busca'] ?? null, 'Busca', false, 120);
     if ($busca !== null) {
-        $like = BANCO === 'pgsql' ? 'ILIKE' : 'LIKE';
-        $cond[] = "(l.descricao $like ? OR l.observacao $like ? OR l.lugar $like ? OR l.cliente $like ?)";
-        for ($i = 0; $i < 4; $i++) {
-            $args[] = '%' . $busca . '%';
+        $texto = expressaoBuscaLancamento();
+        foreach (array_slice(array_unique(explode(' ', normalizaBusca($busca))),0,12) as $palavra) {
+            if ($palavra === '') continue;
+            $cond[] = "$texto LIKE ?";
+            $args[] = '%' . $palavra . '%';
         }
     }
     return [$cond ? 'WHERE ' . implode(' AND ', $cond) : '', $args];
@@ -823,7 +883,7 @@ function rotaNovoLancamento(): array
 {
     $eu = exigeLogin();
     $dados = dadosLancamento($eu);
-    $dados['criado_em'] = agora();
+    $dados['criado_em'] = instanteCadastro();
     $dados['criado_por'] = $eu['id'];
     $id = insere('lancamentos', $dados);
     $novo = umaLinha(SQL_LANCAMENTO . ' WHERE l.id = ?', [$id]);
@@ -883,7 +943,7 @@ function registraAviso(array $eu, string $acao, string $tipo, ?int $lancamentoId
         'lancamento_id' => $lancamentoId,
         'resumo' => mb_substr($resumo, 0, 200),
         'para_usuario_id' => $para,
-        'criado_em' => agora(),
+        'criado_em' => instanteCadastro(),
     ]);
     $destinos = $para !== null ? [$para] : array_column(
         todas("SELECT id FROM usuarios WHERE papel = 'admin' AND ativo = 1 AND id <> ?", [$eu['id']]),
@@ -1018,18 +1078,23 @@ function periodoPanorama(): array
 
 function dadosPanorama(string $deMes, string $ateMes): array
 {
+    $extra=''; $viagemExtra='';
+    if(ehAdmin())foreach(['usuario_id'=>'Motorista','caminhao_id'=>'Caminhão','categoria_id'=>'Categoria'] as $campo=>$nome){
+        if(!empty($_GET[$campo])){$id=campoId($_GET[$campo],$nome,true);$extra.=" AND $campo = ".(int)$id;if($campo!=='categoria_id')$viagemExtra.=" AND $campo = ".(int)$id;}
+    }
+    $fonte="(SELECT * FROM lancamentos WHERE 1=1 $extra)";
     $meses = mesesEntre($deMes, $ateMes);
     $de = limitesDoMes($deMes)[0];
     $ate = limitesDoMes($ateMes)[1];
     $antAteMes = mesAnterior($deMes);
     $antDeMes = date('Y-m', strtotime("$deMes-01 -" . count($meses) . ' month'));
 
-    $totais = function (string $inicio, string $fim): array {
+    $totais = function (string $inicio, string $fim) use ($fonte): array {
         $t = umaLinha(
             "SELECT COUNT(*) AS qtd,
                     COALESCE(SUM(CASE WHEN tipo = 'entrada' THEN valor_centavos ELSE 0 END), 0) AS entradas_centavos,
                     COALESCE(SUM(CASE WHEN tipo = 'saida'   THEN valor_centavos ELSE 0 END), 0) AS saidas_centavos
-               FROM lancamentos WHERE data BETWEEN ? AND ?",
+               FROM $fonte l WHERE data BETWEEN ? AND ?",
             [$inicio, $fim]
         );
         return [
@@ -1043,15 +1108,15 @@ function dadosPanorama(string $deMes, string $ateMes): array
     $combustivel = umaLinha(
         "SELECT COALESCE(SUM(l.litros), 0) AS litros,
                 COALESCE(SUM(l.valor_centavos), 0) AS centavos
-           FROM lancamentos l JOIN categorias c ON c.id = l.categoria_id
+           FROM $fonte l JOIN categorias c ON c.id = l.categoria_id
           WHERE c.pede_litros = 1 AND l.data BETWEEN ? AND ?",
         [$de, $ate]
     );
 
-    $porCategoria = function (string $tipo) use ($de, $ate): array {
+    $porCategoria = function (string $tipo) use ($de, $ate, $fonte): array {
         return todas(
             "SELECT c.nome, c.icone, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
-               FROM lancamentos l JOIN categorias c ON c.id = l.categoria_id
+               FROM $fonte l JOIN categorias c ON c.id = l.categoria_id
               WHERE l.tipo = ? AND l.data BETWEEN ? AND ?
               GROUP BY c.id, c.nome, c.icone ORDER BY total_centavos DESC",
             [$tipo, $de, $ate]
@@ -1065,7 +1130,7 @@ function dadosPanorama(string $deMes, string $ateMes): array
                 COALESCE(SUM(CASE WHEN tipo = 'entrada' THEN valor_centavos ELSE 0 END), 0) AS entradas_centavos,
                 COALESCE(SUM(CASE WHEN tipo = 'saida'   THEN valor_centavos ELSE 0 END), 0) AS saidas_centavos,
                 COUNT(*) AS qtd
-           FROM lancamentos WHERE data BETWEEN ? AND ?
+           FROM $fonte l WHERE data BETWEEN ? AND ?
           GROUP BY $coluna",
         [$de, $ate]
     ) as $l) {
@@ -1091,7 +1156,7 @@ function dadosPanorama(string $deMes, string $ateMes): array
                 COALESCE(SUM(CASE WHEN c.pede_litros = 1 THEN l.litros ELSE 0 END), 0) AS litros,
                 COALESCE(SUM(CASE WHEN c.pede_litros = 1 THEN l.valor_centavos ELSE 0 END), 0) AS combustivel_centavos,
                 COUNT(*) AS qtd
-           FROM lancamentos l
+           FROM $fonte l
            JOIN categorias c ON c.id = l.categoria_id
            LEFT JOIN caminhoes cm ON cm.id = l.caminhao_id
           WHERE l.data BETWEEN ? AND ?
@@ -1100,9 +1165,9 @@ function dadosPanorama(string $deMes, string $ateMes): array
     );
     foreach ($caminhoes as &$cm) {
         $cm['km_rodados'] = $cm['id'] ? (int) umValor(
-            'SELECT COALESCE(SUM(km_final - km_inicial), 0) FROM viagens
+            "SELECT COALESCE(SUM(km_final - km_inicial), 0) FROM viagens
               WHERE caminhao_id = ? AND km_final IS NOT NULL AND km_inicial IS NOT NULL
-                AND inicio BETWEEN ? AND ?',
+                AND inicio BETWEEN ? AND ? $viagemExtra",
             [$cm['id'], $de, $ate]
         ) : 0;
         $cm['saldo_centavos'] = (int) $cm['entradas_centavos'] - (int) $cm['saidas_centavos'];
@@ -1125,7 +1190,7 @@ function dadosPanorama(string $deMes, string $ateMes): array
         'por_motorista' => todas(
             // Salário e diárias são pagos ao motorista, não gastos feitos por ele na estrada.
             "SELECT u.nome, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
-               FROM lancamentos l JOIN usuarios u ON u.id = l.usuario_id
+               FROM $fonte l JOIN usuarios u ON u.id = l.usuario_id
               WHERE l.tipo = 'saida' AND l.data BETWEEN ? AND ?
                 AND l.categoria_id NOT IN (SELECT id FROM categorias WHERE oculta_motorista = 1)
               GROUP BY u.id, u.nome ORDER BY total_centavos DESC",
@@ -1135,11 +1200,11 @@ function dadosPanorama(string $deMes, string $ateMes): array
             "SELECT l.data,
                     COALESCE(SUM(CASE WHEN l.tipo = 'entrada' THEN l.valor_centavos ELSE 0 END), 0) AS entradas_centavos,
                     COALESCE(SUM(CASE WHEN l.tipo = 'saida'   THEN l.valor_centavos ELSE 0 END), 0) AS saidas_centavos
-               FROM lancamentos l WHERE l.data BETWEEN ? AND ?
+               FROM $fonte l WHERE l.data BETWEEN ? AND ?
               GROUP BY l.data ORDER BY l.data",
             [$de, $ate]
         ),
-        'viagens_abertas' => (int) umValor("SELECT COUNT(*) FROM viagens WHERE status = 'aberta'"),
+        'viagens_abertas' => (int) umValor("SELECT COUNT(*) FROM viagens WHERE status = 'aberta' $viagemExtra"),
         'a_receber' => totaisAReceber(),
     ];
 }
@@ -1578,69 +1643,31 @@ function rotaBaixaComprovante(): void
 
 function rotaReceita(): array
 {
-    exigeLogin();
-    [$deMes, $ateMes] = periodoPanorama();
-    $de = limitesDoMes($deMes)[0];
-    $ate = limitesDoMes($ateMes)[1];
-    $meses = mesesEntre($deMes, $ateMes);
-    $antAteMes = mesAnterior($deMes);
-    $antDeMes = date('Y-m', strtotime("$deMes-01 -" . count($meses) . ' month'));
-
-    $total = fn (string $inicio, string $fim) => (int) umValor(
-        "SELECT COALESCE(SUM(valor_centavos), 0) FROM lancamentos WHERE tipo = 'entrada' AND data BETWEEN ? AND ?",
-        [$inicio, $fim]
-    );
-
-    $coluna = sqlMes('data');
-    $porMes = [];
-    foreach (todas(
-        "SELECT $coluna AS mes, SUM(valor_centavos) AS total_centavos, COUNT(*) AS qtd
-           FROM lancamentos WHERE tipo = 'entrada' AND data BETWEEN ? AND ?
-          GROUP BY $coluna",
-        [$de, $ate]
-    ) as $m) {
-        $porMes[$m['mes']] = $m;
+    $eu = exigeLogin();
+    if ($eu['papel'] === 'admin') return dadosPanorama(...periodoPanorama());
+    $atual = date('Y-m');
+    $anterior = mesAnterior($atual);
+    $mes = mesValido($_GET['mes'] ?? $_GET['de'] ?? $atual);
+    foreach (['mes','de','ate'] as $campo) {
+        if (isset($_GET[$campo]) && $_GET[$campo] !== $mes) throw new ErroDeUso('Consulte um mês de cada vez: o atual ou o anterior.',403);
     }
+    if (!in_array($mes,[$atual,$anterior],true)) throw new ErroDeUso('A receita está disponível somente para o mês atual e o anterior.',403);
+    $dados = dadosPanorama($mes,$mes);
+    unset($dados['por_motorista']);
+    if ($mes === $anterior) {
+        unset($dados['anterior'],$dados['anterior_de'],$dados['anterior_ate']);
+    }
+    return $dados;
+}
 
-    return [
-        'de' => $deMes,
-        'ate' => $ateMes,
-        'anterior_de' => $antDeMes,
-        'anterior_ate' => $antAteMes,
-        'total_centavos' => $total($de, $ate),
-        'anterior_centavos' => $total(limitesDoMes($antDeMes)[0], limitesDoMes($antAteMes)[1]),
-        'meses' => array_map(fn ($mes) => [
-            'mes' => $mes,
-            'total_centavos' => (int) ($porMes[$mes]['total_centavos'] ?? 0),
-            'qtd' => (int) ($porMes[$mes]['qtd'] ?? 0),
-        ], $meses),
-        'por_categoria' => todas(
-            "SELECT c.nome, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
-               FROM lancamentos l JOIN categorias c ON c.id = l.categoria_id
-              WHERE l.tipo = 'entrada' AND l.data BETWEEN ? AND ?
-              GROUP BY c.id, c.nome ORDER BY total_centavos DESC",
-            [$de, $ate]
-        ),
-        'por_caminhao' => todas(
-            "SELECT COALESCE(cm.placa, 'Sem caminhão') AS nome, COUNT(*) AS qtd, SUM(l.valor_centavos) AS total_centavos
-               FROM lancamentos l LEFT JOIN caminhoes cm ON cm.id = l.caminhao_id
-              WHERE l.tipo = 'entrada' AND l.data BETWEEN ? AND ?
-              GROUP BY cm.id, cm.placa ORDER BY total_centavos DESC",
-            [$de, $ate]
-        ),
-        'itens' => todas(
-            "SELECT l.id, l.data, l.descricao, l.cliente, l.lugar, l.valor_centavos, c.nome AS categoria,
-                    cm.placa, v.origem AS viagem_origem, v.destino AS viagem_destino
-               FROM lancamentos l
-               JOIN categorias c ON c.id = l.categoria_id
-               LEFT JOIN caminhoes cm ON cm.id = l.caminhao_id
-               LEFT JOIN viagens v ON v.id = l.viagem_id
-              WHERE l.tipo = 'entrada' AND l.data BETWEEN ? AND ?
-              ORDER BY l.data DESC, l.id DESC LIMIT 300",
-            [$de, $ate]
-        ),
-        'a_receber' => totaisAReceber(),
-    ];
+function rotaMeuCaminhao(): array
+{
+    $eu = exigeLogin();
+    $corpo = corpoJson();
+    $id = campoId($corpo['caminhao_padrao_id'] ?? null,'Caminhão padrão');
+    if ($id !== null && !umValor('SELECT id FROM caminhoes WHERE id = ? AND ativo = 1',[$id])) throw new ErroDeUso('Escolha um caminhão em operação.');
+    atualiza('usuarios',$eu['id'],['caminhao_padrao_id'=>$id]);
+    return array_replace($eu,['caminhao_padrao_id'=>$id]);
 }
 
 // ---------------------------------------------------------------------------
@@ -1649,12 +1676,14 @@ function rotaReceita(): array
 
 const SQL_NOTA = '
     SELECT n.*, u.nome AS enviado_por, cm.placa, cm.apelido AS caminhao_apelido,
-           v.origem AS viagem_origem, v.destino AS viagem_destino,
+           v.origem AS viagem_origem, v.destino AS viagem_destino, v.inicio AS viagem_inicio, v.fim AS viagem_fim,
+           COALESCE(cl.nome, n.cliente) AS cliente_atual,
            (SELECT MIN(rb.id) FROM recebiveis rb WHERE rb.nota_fiscal_id = n.id) AS recebivel_id
       FROM notas_fiscais n
       JOIN usuarios u ON u.id = n.usuario_id
       LEFT JOIN caminhoes cm ON cm.id = n.caminhao_id
-      LEFT JOIN viagens v ON v.id = n.viagem_id';
+      LEFT JOIN viagens v ON v.id = n.viagem_id
+      LEFT JOIN clientes cl ON cl.id = v.cliente_id';
 
 function rotaNotas(): array
 {
@@ -1683,8 +1712,8 @@ function rotaNotas(): array
     $busca = campoTexto($_GET['busca'] ?? null, 'Busca', false, 60);
     if ($busca !== null) {
         $like = BANCO === 'pgsql' ? 'ILIKE' : 'LIKE';
-        $cond[] = "(n.numero $like ? OR n.cliente $like ? OR n.observacao $like ?)";
-        array_push($args, "%$busca%", "%$busca%", "%$busca%");
+        $cond[] = "(n.numero $like ? OR n.cliente $like ? OR n.observacao $like ? OR cl.nome $like ?)";
+        array_push($args, "%$busca%", "%$busca%", "%$busca%", "%$busca%");
     }
     [$limite, $offset] = paginacao($_GET);
     $where = $cond ? 'WHERE ' . implode(' AND ', $cond) : '';
@@ -1715,16 +1744,15 @@ function dadosNota(array $corpo): array
         throw new ErroDeUso('Arquivo inválido.');
     }
     $viagemId = campoId($corpo['viagem_id'] ?? null, 'Viagem');
-    if ($viagemId !== null) {
-        viagemAcessivel($viagemId);
-    }
+    $viagem = $viagemId !== null ? viagemAcessivel($viagemId) : null;
+    $cliente = $viagem && $viagem['cliente_id'] ? umValor('SELECT nome FROM clientes WHERE id = ?',[$viagem['cliente_id']]) : null;
     return [
         'numero' => campoTexto($corpo['numero'] ?? null, 'Número da nota', false, 40),
-        'cliente' => campoTexto($corpo['cliente'] ?? null, 'Cliente', false, 90),
-        'data' => campoData($corpo['data'] ?? null, 'Data de emissão'),
+        'cliente' => campoTexto($corpo['cliente'] ?? $cliente, 'Cliente', false, 90),
+        'data' => campoData($corpo['data'] ?? date('Y-m-d'), 'Data de emissão'),
         'valor_centavos' => campoCentavosOpcional($corpo['valor'] ?? null, 'Valor da nota'),
         'viagem_id' => $viagemId,
-        'caminhao_id' => campoId($corpo['caminhao_id'] ?? null, 'Caminhão'),
+        'caminhao_id' => campoId($corpo['caminhao_id'] ?? ($viagem['caminhao_id'] ?? exigeLogin()['caminhao_padrao_id']), 'Caminhão'),
         'arquivo' => $arquivo,
         'observacao' => campoTexto($corpo['observacao'] ?? null, 'Observação', false, 500),
     ];
@@ -1742,7 +1770,7 @@ function rotaNovaNota(): array
     $eu = exigeLogin();
     $dados = dadosNota(corpoJson());
     $dados['usuario_id'] = $eu['id'];
-    $dados['criado_em'] = agora();
+    $dados['criado_em'] = instanteCadastro();
     $id = insere('notas_fiscais', $dados);
     registraAviso($eu, 'enviou', 'nota', null, resumoDaNota($dados));
     return anotaPrazo($eu, umaLinha(SQL_NOTA . ' WHERE n.id = ?', [$id]), 'usuario_id');
@@ -1752,7 +1780,9 @@ function rotaEditaNota(int $id): array
 {
     $eu = exigeLogin();
     $atual = notaAlteravel($id);
-    $dados = dadosNota(corpoJson());
+    $preservados=$atual;
+    $preservados['valor']=$atual['valor_centavos'] !== null ? number_format($atual['valor_centavos']/100,2,'.','') : null;
+    $dados = dadosNota(array_replace($preservados,corpoJson()));
     $dados['atualizado_em'] = agora();
     atualiza('notas_fiscais', $id, $dados);
     if ($dados['arquivo'] !== $atual['arquivo'] && !arquivoEmUso($atual['arquivo'])) {
@@ -1801,7 +1831,7 @@ function situacaoRecebivel(array $r): array
     $r['valor_centavos'] = $total;
     $r['recebido_centavos'] = $recebido;
     $r['restante_centavos'] = max(0, $total - $recebido);
-    $r['situacao'] = $recebido <= 0 ? 'pendente' : ($recebido >= $total ? 'recebido' : 'parcial');
+    $r['situacao'] = $recebido >= $total ? 'recebido' : ($recebido > 0 ? 'parcial' : 'pendente');
     $r['vencido'] = $r['situacao'] !== 'recebido' && !empty($r['vencimento'])
         && substr((string) $r['vencimento'], 0, 10) < date('Y-m-d');
     return $r;
@@ -1926,7 +1956,7 @@ function rotaNovoRecebivel(): array
 {
     $eu = exigeAdmin();
     $dados = dadosRecebivel(corpoJson());
-    $dados['criado_em'] = agora();
+    $dados['criado_em'] = instanteCadastro();
     $dados['criado_por'] = $eu['id'];
     return recebivelExistente(insere('recebiveis', $dados));
 }
@@ -1986,7 +2016,7 @@ function rotaRecebeParte(int $id): array
         'observacao' => campoTexto($corpo['observacao'] ?? null, 'Observação', false, 500),
         'comprovante' => $comprovante,
         'recebivel_id' => $id,
-        'criado_em' => agora(),
+        'criado_em' => instanteCadastro(),
         'criado_por' => $eu['id'],
     ]);
     return recebivelExistente($id);
@@ -2008,7 +2038,7 @@ function anotaDiaria(array $eu, array $d): array
 {
     $d = anotaPrazo($eu, $d, 'criado_por');
     $d['pago'] = $d['lancamento_id'] !== null;
-    if ($d['pago']) {
+    if ($d['pago'] && $eu['papel'] !== 'admin') {
         $d['pode_alterar'] = false;
         $d['segundos_para_alterar'] = $eu['papel'] === 'admin' ? null : 0;
     }
@@ -2020,8 +2050,9 @@ function rotaDiarias(): array
     $eu = exigeLogin();
     $mes = mesValido($_GET['mes'] ?? '');
     [$de, $ate] = limitesDoMes($mes);
-    $cond = ['d.data BETWEEN ? AND ?'];
-    $args = [$de, $ate];
+    $todosPendentes = ($_GET['escopo'] ?? '') === 'pendentes';
+    $cond = $todosPendentes ? ['d.lancamento_id IS NULL'] : ['d.data BETWEEN ? AND ?'];
+    $args = $todosPendentes ? [] : [$de, $ate];
     $soMotorista = $eu['papel'] !== 'admin' ? $eu['id'] : campoId($_GET['usuario_id'] ?? null, 'Motorista');
     if ($soMotorista !== null) {
         $cond[] = 'd.usuario_id = ?';
@@ -2038,7 +2069,7 @@ function rotaDiarias(): array
         : todas(
             "SELECT id, nome, valor_diaria_centavos FROM usuarios
               WHERE (papel = 'motorista' AND ativo = 1)
-                 OR id IN (SELECT usuario_id FROM diarias WHERE data BETWEEN ? AND ?)
+                 OR id IN (SELECT usuario_id FROM diarias WHERE data BETWEEN ? AND ? OR lancamento_id IS NULL)
               ORDER BY nome",
             [$de, $ate]
         );
@@ -2078,6 +2109,12 @@ function rotaDiarias(): array
     }
     return [
         'mes' => $mes,
+        'pagamentos' => todas('SELECT l.id, l.usuario_id, u.nome AS motorista, l.valor_centavos, l.data, l.pagamento, l.criado_em,
+            (SELECT COUNT(*) FROM diarias d WHERE d.lancamento_id = l.id) AS dias
+            FROM lancamentos l JOIN usuarios u ON u.id = l.usuario_id
+            WHERE l.data BETWEEN ? AND ? AND EXISTS (SELECT 1 FROM diarias d WHERE d.lancamento_id = l.id)'
+            . ($soMotorista !== null ? ' AND l.usuario_id = ?' : '') . ' ORDER BY l.data DESC, l.id DESC',
+            $soMotorista !== null ? [$de, $ate, $soMotorista] : [$de, $ate]),
         'itens' => $itens,
         'motoristas' => array_values($motoristas),
         'totais' => $totais,
@@ -2120,34 +2157,35 @@ function rotaNovasDiarias(): array
     }
     $observacao = campoTexto($corpo['observacao'] ?? null, 'Observação', false, 200);
 
+    $semana = $corpo['dias_semana'] ?? range(0,6);
+    if (!is_array($semana) || !$semana || array_filter($semana, fn ($d) => !is_scalar($d) || !preg_match('/^[0-6]$/', (string) $d))) throw new ErroDeUso('Escolha os dias da semana trabalhados.');
+    $semana = array_map('intval', $semana);
     $criadas = 0;
+    $idsPorData = [];
+    $considerados = 0;
     $dia = new DateTime($de);
     for ($i = 0; $i < $dias; $i++, $dia->modify('+1 day')) {
+        if (!in_array((int) $dia->format('w'), $semana, true)) continue;
+        $considerados++;
         $data = $dia->format('Y-m-d');
-        if (umValor('SELECT id FROM diarias WHERE usuario_id = ? AND data = ?', [$usuarioId, $data]) !== null) {
-            continue;
-        }
-        try {
-            insere('diarias', [
-                'usuario_id' => $usuarioId,
-                'data' => $data,
-                'valor_centavos' => $valor,
-                'viagem_id' => $viagemId,
-                'observacao' => $observacao,
-                'criado_em' => agora(),
-                'criado_por' => $eu['id'],
-            ]);
-            $criadas++;
-        } catch (PDOException $e) {
-            // Outro pedido gravou o mesmo dia ao mesmo tempo; conta como já registrado.
-        }
+        $existente = umValor('SELECT id FROM diarias WHERE usuario_id = ? AND data = ?', [$usuarioId, $data]);
+        if ($existente !== null) { $idsPorData[$data]=(int) $existente; continue; }
+        $campos = ['usuario_id'=>$usuarioId,'data'=>$data,'valor_centavos'=>$valor,'viagem_id'=>$viagemId,
+            'observacao'=>$observacao,'criado_em'=>instanteCadastro(),'criado_por'=>$eu['id']];
+        $colunas=implode(',',array_keys($campos));
+        $marcas=implode(',',array_fill(0,count($campos),'?'));
+        $sql="INSERT INTO diarias ($colunas) VALUES ($marcas)";
+        $sql .= BANCO === 'mysql' ? ' ON DUPLICATE KEY UPDATE id=id' : ' ON CONFLICT (usuario_id,data) DO NOTHING';
+        $criadas += consulta($sql,array_values($campos))->rowCount() > 0 ? 1 : 0;
+        $idsPorData[$data]=(int) umValor('SELECT id FROM diarias WHERE usuario_id = ? AND data = ?',[$usuarioId,$data]);
+
     }
     if ($criadas > 0) {
         registraAviso($eu, 'registrou', 'diaria', null,
             ($criadas === 1 ? '1 diária' : "$criadas diárias") . ' · ' . pdfData($de)
             . ($ate !== $de ? ' a ' . pdfData($ate) : ''));
     }
-    return ['criadas' => $criadas, 'ja_existiam' => $dias - $criadas];
+    return ['criadas' => $criadas, 'ja_existiam' => $considerados - $criadas, 'ids_por_data'=>$idsPorData];
 }
 
 function diariaAlteravel(int $id): array
@@ -2158,7 +2196,7 @@ function diariaAlteravel(int $id): array
         throw new ErroDeUso('Diária não encontrada.', 404);
     }
     exigePrazoDoMotorista($eu, $d, 'criado_por', 'esta diária');
-    if ($d['lancamento_id'] !== null) {
+    if ($d['lancamento_id'] !== null && $eu['papel'] !== 'admin') {
         throw new ErroDeUso('Esta diária já foi paga. Para mudar, exclua antes o pagamento em Lançamentos.');
     }
     return $d;
@@ -2189,6 +2227,7 @@ function rotaEditaDiaria(int $id): array
             ?? (int) $d['valor_centavos'];
     }
     atualiza('diarias', $id, $dados);
+    if ($d['lancamento_id'] !== null) recalculaPagamentoDiarias((int) $d['lancamento_id']);
     return ['ok' => true];
 }
 
@@ -2216,6 +2255,7 @@ function rotaExcluiDiaria(int $id): array
     $eu = exigeLogin();
     $d = diariaAlteravel($id);
     consulta('DELETE FROM diarias WHERE id = ?', [$id]);
+    if ($d['lancamento_id'] !== null) recalculaPagamentoDiarias((int) $d['lancamento_id']);
     registraAviso($eu, 'excluiu', 'diaria', null, 'Diária de ' . pdfData($d['data']));
     return ['ok' => true];
 }
@@ -2229,17 +2269,24 @@ function rotaPagaDiarias(): array
     if (umValor('SELECT id FROM usuarios WHERE id = ?', [$usuarioId]) === null) {
         throw new ErroDeUso('Motorista não encontrado.');
     }
+    if (BANCO !== 'sqlite') consulta('SELECT id FROM usuarios WHERE id = ? FOR UPDATE', [$usuarioId]);
     $mes = mesValido($corpo['mes'] ?? '');
     [$de, $ate] = limitesDoMes($mes);
     $categoriaId = campoId($corpo['categoria_id'] ?? null, 'Categoria do pagamento', true);
     if (umValor("SELECT id FROM categorias WHERE id = ? AND tipo = 'saida'", [$categoriaId]) === null) {
         throw new ErroDeUso('Escolha uma categoria de gasto para o pagamento.');
     }
-    $pendentes = todas(
-        'SELECT id, valor_centavos FROM diarias
-          WHERE usuario_id = ? AND lancamento_id IS NULL AND data BETWEEN ? AND ?',
-        [$usuarioId, $de, $ate]
-    );
+    $selecionadas = $corpo['ids'] ?? null;
+    $filtroDias = ' AND data BETWEEN ? AND ?';
+    $argsDias = [$usuarioId, $de, $ate];
+    if ($selecionadas !== null) {
+        if (!is_array($selecionadas) || !$selecionadas || count($selecionadas) > 1000) throw new ErroDeUso('Selecione as diárias que serão pagas.');
+        $selecionadas = array_values(array_unique(array_map(fn ($id) => campoId($id, 'Diária', true), $selecionadas)));
+        $filtroDias = ' AND id IN (' . implode(',', array_fill(0,count($selecionadas),'?')) . ')';
+        $argsDias = [$usuarioId, ...$selecionadas];
+    }
+    $pendentes = todas('SELECT id, valor_centavos FROM diarias WHERE usuario_id = ? AND lancamento_id IS NULL' . $filtroDias, $argsDias);
+    if ($selecionadas !== null && count($pendentes) !== count($selecionadas)) throw new ErroDeUso('Uma das diárias já foi paga ou pertence a outro motorista. Atualize a lista.');
     if (!$pendentes) {
         throw new ErroDeUso('Nenhuma diária pendente deste motorista no mês.');
     }
@@ -2250,7 +2297,7 @@ function rotaPagaDiarias(): array
     }
     $total = array_sum(array_map(fn ($d) => (int) $d['valor_centavos'], $pendentes));
     $qtd = count($pendentes);
-    $descricao = 'Diárias de ' . mesPorExtenso($mes) . " ($qtd " . ($qtd === 1 ? 'dia' : 'dias') . ')';
+    $descricao = ($selecionadas !== null ? 'Diárias de motorista' : 'Diárias de ' . mesPorExtenso($mes)) . " ($qtd " . ($qtd === 1 ? 'dia' : 'dias') . ')';
     $lancamentoId = insere('lancamentos', [
         'tipo' => 'saida',
         'usuario_id' => $usuarioId,
@@ -2260,7 +2307,7 @@ function rotaPagaDiarias(): array
         'data' => campoData($corpo['data'] ?? date('Y-m-d'), 'Dia do pagamento'),
         'pagamento' => campoTexto($corpo['pagamento'] ?? null, 'Forma de pagamento', false, 30),
         'observacao' => campoTexto($corpo['observacao'] ?? null, 'Observação', false, 500),
-        'criado_em' => agora(),
+        'criado_em' => instanteCadastro(),
         'criado_por' => $eu['id'],
     ]);
     $ids = array_map(fn ($d) => (int) $d['id'], $pendentes);
@@ -2270,4 +2317,12 @@ function rotaPagaDiarias(): array
     );
     registraAviso($eu, 'pagou', 'diaria', null, "$descricao · " . pdfReais($total), $usuarioId);
     return ['lancamento_id' => $lancamentoId, 'total_centavos' => $total, 'dias' => $qtd];
+}
+
+function recalculaPagamentoDiarias(int $id): void
+{
+    $total = (int) umValor('SELECT COALESCE(SUM(valor_centavos),0) FROM diarias WHERE lancamento_id = ?', [$id]);
+    $dias = (int) umValor('SELECT COUNT(*) FROM diarias WHERE lancamento_id = ?', [$id]);
+    if (!$dias) { consulta('DELETE FROM lancamentos WHERE id = ?', [$id]); return; }
+    atualiza('lancamentos',$id,['valor_centavos'=>$total,'descricao'=>"Diárias de motorista ($dias dias)", 'atualizado_em'=>agora(),'atualizado_por'=>exigeLogin()['id']]);
 }

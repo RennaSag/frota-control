@@ -22,6 +22,7 @@ function banco(): PDO
             $pdo = new PDO('sqlite:' . SQLITE_ARQUIVO, null, null, $opcoes);
             $pdo->exec('PRAGMA journal_mode = WAL');
             $pdo->exec('PRAGMA foreign_keys = ON');
+            $pdo->sqliteCreateFunction('normaliza_busca', 'normalizaBusca', 1, PDO::SQLITE_DETERMINISTIC);
         } elseif (BANCO === 'pgsql') {
             [$dsn, $usuario, $senha] = dsnPostgres(PG_URL);
             $pdo = new PDO($dsn, $usuario, $senha, $opcoes);
@@ -136,7 +137,7 @@ function atualiza(string $tabela, int $id, array $dados): int
 
 // Sobe sempre que a estrutura muda; bancos antigos ganham as tabelas e colunas novas
 // na primeira visita depois da atualização, sem perder nada.
-const VERSAO_ESQUEMA = 3;
+const VERSAO_ESQUEMA = 5;
 
 function criaEstrutura(PDO $pdo): void
 {
@@ -160,6 +161,27 @@ function criaEstrutura(PDO $pdo): void
         }
     }
     semeia($pdo, $novasColunas);
+    if ($versao < 4) {
+        // Importa os nomes já utilizados sem alterar o histórico financeiro.
+        $nomes = $pdo->query("SELECT cliente FROM recebiveis WHERE cliente IS NOT NULL UNION SELECT cliente FROM notas_fiscais WHERE cliente IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($nomes as $nome) {
+            $nome = trim((string) $nome);
+            if ($nome === '' || $nome === 'Cliente não informado') continue;
+            $existe = $pdo->prepare('SELECT id FROM clientes WHERE LOWER(nome) = LOWER(?)');
+            $existe->execute([$nome]);
+            if (!$existe->fetchColumn()) {
+                $pdo->prepare('INSERT INTO clientes (nome, ativo, criado_em) VALUES (?, 1, ?)')->execute([$nome, date('Y-m-d H:i:s')]);
+            }
+        }
+        $vinculos = $pdo->query("SELECT viagem_id, MIN(cliente) AS cliente FROM (
+            SELECT viagem_id, cliente FROM recebiveis WHERE viagem_id IS NOT NULL AND cliente IS NOT NULL
+            UNION SELECT viagem_id, cliente FROM notas_fiscais WHERE viagem_id IS NOT NULL AND cliente IS NOT NULL
+        ) historico GROUP BY viagem_id HAVING COUNT(DISTINCT LOWER(cliente)) = 1")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($vinculos as $vinculo) {
+            $pdo->prepare('UPDATE viagens SET cliente_id = (SELECT MIN(id) FROM clientes WHERE LOWER(nome) = LOWER(?)) WHERE id = ? AND cliente_id IS NULL')
+                ->execute([trim($vinculo['cliente']), $vinculo['viagem_id']]);
+        }
+    }
     $pdo->exec('DELETE FROM esquema');
     $pdo->exec('INSERT INTO esquema (versao) VALUES (' . VERSAO_ESQUEMA . ')');
 }
@@ -240,6 +262,17 @@ function estruturaSql(string $banco): array
         ordem          INT         NOT NULL,
         ativo          $simNao     NOT NULL,
         UNIQUE (nome, tipo)";
+
+    $tabelas['clientes'] = "
+        id $id,
+        nome VARCHAR(90) NOT NULL UNIQUE,
+        telefone VARCHAR(30) NULL,
+        documento VARCHAR(30) NULL,
+        email VARCHAR(120) NULL,
+        observacao VARCHAR(500) NULL,
+        ativo $simNao NOT NULL DEFAULT 1,
+        criado_em $dataHora NOT NULL,
+        atualizado_em $dataHora NULL";
 
     $tabelas['viagens'] = "
         id          $id,
@@ -404,6 +437,7 @@ function estruturaSql(string $banco): array
         'idx_lanc_usuario' => 'lancamentos (usuario_id)',
         'idx_lanc_viagem' => 'lancamentos (viagem_id)',
         'idx_viagem_usuario' => 'viagens (usuario_id)',
+        'idx_viagem_cliente' => 'viagens (cliente_id)',
         'idx_lanc_recebivel' => 'lancamentos (recebivel_id)',
         'idx_nota_usuario' => 'notas_fiscais (usuario_id)',
         'idx_diaria_data' => 'diarias (data)',
@@ -412,6 +446,18 @@ function estruturaSql(string $banco): array
         $comandos['indices'][] = "CREATE INDEX $nome ON $alvo";
     }
     $comandos['colunas'] = [
+        ['clientes', 'cep', 'VARCHAR(12) NULL'],
+        ['clientes', 'logradouro', 'VARCHAR(140) NULL'],
+        ['clientes', 'numero', 'VARCHAR(20) NULL'],
+        ['clientes', 'complemento', 'VARCHAR(90) NULL'],
+        ['clientes', 'bairro', 'VARCHAR(80) NULL'],
+        ['clientes', 'cidade', 'VARCHAR(80) NULL'],
+        ['clientes', 'uf', 'VARCHAR(2) NULL'],
+        ['viagens', 'criado_por', "$ref NULL"],
+        ['viagens', 'cliente_id', "$ref NULL REFERENCES clientes(id)"],
+        ['viagens', 'atualizado_em', "$dataHora NULL"],
+        ['viagens', 'nota_fiscal_numero', 'VARCHAR(40) NULL'],
+        ['categorias', 'criado_em', "$dataHora NULL"],
         ['usuarios', 'caminhao_padrao_id', "$ref NULL"],
         ['usuarios', 'valor_diaria_centavos', "$dinheiro NULL"],
         ['categorias', 'oculta_motorista', "$simNao NOT NULL DEFAULT 0"],

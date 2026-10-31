@@ -1,5 +1,7 @@
 <?php
 
+date_default_timezone_set('America/Sao_Paulo');
+
 function conf(string $nome, string $padrao): string
 {
     $valor = getenv('FROTA_' . $nome);

@@ -164,10 +164,45 @@ function agora(): string
     return date('Y-m-d H:i:s');
 }
 
+function normalizaBusca(string $texto): string
+{
+    $texto = strtr(mb_strtolower($texto), ['á'=>'a','à'=>'a','â'=>'a','ã'=>'a','ä'=>'a','é'=>'e','è'=>'e','ê'=>'e','ë'=>'e','í'=>'i','ì'=>'i','î'=>'i','ï'=>'i','ó'=>'o','ò'=>'o','ô'=>'o','õ'=>'o','ö'=>'o','ú'=>'u','ù'=>'u','û'=>'u','ü'=>'u','ç'=>'c','ñ'=>'n']);
+    return trim(preg_replace('/[^a-z0-9]+/', ' ', $texto));
+}
+
+function expressaoBuscaLancamento(): string
+{
+    $campos = ['l.descricao','l.observacao','l.lugar','l.cliente',
+        '(SELECT u.nome FROM usuarios u WHERE u.id=l.usuario_id)',
+        '(SELECT c.nome FROM categorias c WHERE c.id=l.categoria_id)',
+        '(SELECT cm.placa FROM caminhoes cm WHERE cm.id=l.caminhao_id)',
+        '(SELECT cm.apelido FROM caminhoes cm WHERE cm.id=l.caminhao_id)',
+        '(SELECT cl.nome FROM clientes cl JOIN viagens v ON v.cliente_id=cl.id WHERE v.id=l.viagem_id)',
+        '(SELECT v.origem FROM viagens v WHERE v.id=l.viagem_id)',
+        '(SELECT v.destino FROM viagens v WHERE v.id=l.viagem_id)'];
+    $campos = array_map(fn($campo)=>"COALESCE($campo, '')",$campos);
+    $texto = BANCO === 'mysql' ? "CONCAT_WS(' ', ".implode(', ',$campos).')' : implode(" || ' ' || ",$campos);
+    if (BANCO === 'sqlite') return "normaliza_busca($texto)";
+    if (BANCO === 'pgsql') $texto = "translate(LOWER($texto), 'áàâãäéèêëíìîïóòôõöúùûüçñ', 'aaaaaeeeeiiiiooooouuuucn')";
+    else $texto = "LOWER($texto)";
+    foreach (['-', '.', '/', '(', ')', ',', '_'] as $sinal) $texto="REPLACE($texto, '$sinal', ' ')";
+    return $texto;
+}
+
 function paginacao(array $query): array
 {
     $limite = (int) ($query['limite'] ?? 100);
     $limite = max(1, min($limite, 1000));
     $pagina = max(1, (int) ($query['pagina'] ?? 1));
     return [$limite, ($pagina - 1) * $limite, $pagina];
+}
+
+// Data original do cadastro offline; nunca permite estender o prazo para o futuro.
+function instanteCadastro(): string
+{
+    $ms = $_SERVER['HTTP_X_REGISTRADO_EM'] ?? null;
+    if ($ms === null || !is_numeric($ms)) return agora();
+    $segundos = min(time(), (int) floor((float) $ms / 1000));
+    if ($segundos < time() - 366 * 86400) throw new ErroDeUso('Confira a data e hora do aparelho antes de enviar o cadastro.');
+    return date('Y-m-d H:i:s', $segundos);
 }
