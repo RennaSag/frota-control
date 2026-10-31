@@ -2,7 +2,7 @@
 require __DIR__ . '/config.php';
 $nome = htmlspecialchars(NOME_SISTEMA, ENT_QUOTES, 'UTF-8');
 // Subir a versão renova o cache do app nos aparelhos (o sw.js usa este número).
-$v = '7.3.2';
+$v = '7.3.3';
 $destino = PG_URL !== '' ? parse_url(PG_URL) : [];
 $ambiente = conf('AMBIENTE', '') === 'demonstracao' ? 'demonstracao' : substr(hash('sha256', BANCO . ':' . ($destino['host'] ?? SQLITE_ARQUIVO) . ':' . ($destino['path'] ?? '')), 0, 16);
 ?>

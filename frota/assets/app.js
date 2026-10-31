@@ -63,6 +63,10 @@ function mesLongo(mes) {
   const [a, m] = mes.split('-');
   return `${MESES[Number(m) - 1]} de ${a}`;
 }
+function mesAbreviado(mes) {
+  const [a, m] = String(mes || '').split('-');
+  return a && m ? `${MESES_CURTOS[Number(m) - 1]} ${a}` : '';
+}
 function mesCurto(mes) {
   const [a, m] = mes.split('-');
   return `${MESES_CURTOS[Number(m) - 1]}/${a.slice(2)}`;
@@ -2626,14 +2630,14 @@ async function telaPanorama(alvo) {
         <div class="grade-filtro-panorama-limpo">
           <div class="campo campo-mes-de">
             <label for="p-de">Mês inicial</label>
-            <input id="p-de" type="month" value="${periodo.de}">
+            <div class="mes-resumido"><span data-mes-de>${mesAbreviado(periodo.de)}</span>${icone('calendario')}<input id="p-de" type="month" value="${periodo.de}"></div>
           </div>
           <div class="campo campo-mes-ate">
             <label for="p-ate">Mês final</label>
-            <input id="p-ate" type="month" value="${periodo.ate}">
+            <div class="mes-resumido"><span data-mes-ate>${mesAbreviado(periodo.ate)}</span>${icone('calendario')}<input id="p-ate" type="month" value="${periodo.ate}"></div>
           </div>
           <div class="campo acao-filtro-atalhos">
-            <label class="rotulo-invisivel-alinhamento">&nbsp;</label>
+            <label class="rotulo-invisivel-alinhamento" aria-hidden="true">&nbsp;</label>
             <button class="btn-icone-filtro-panorama" type="button" id="p-btn-atalhos" title="Filtros do Panorama" aria-label="Filtros do Panorama">
               ${icone('filtro')} <span>Filtros</span>
             </button>
@@ -2646,12 +2650,22 @@ async function telaPanorama(alvo) {
 
   const campoDe = alvo.querySelector('#p-de');
   const campoAte = alvo.querySelector('#p-ate');
+  // O campo de mês nativo mostra "outubro de 2026"; por cima dele exibimos "out 2026".
+  const mostraMeses = () => {
+    alvo.querySelector('[data-mes-de]').textContent = mesAbreviado(campoDe.value || periodo.de);
+    alvo.querySelector('[data-mes-ate]').textContent = mesAbreviado(campoAte.value || periodo.ate);
+  };
+  [campoDe, campoAte].forEach((campo) => {
+    campo.addEventListener('input', mostraMeses);
+    campo.addEventListener('click', () => { try { campo.showPicker?.(); } catch { /* navegador sem showPicker */ } });
+  });
 
   const atualiza = async () => {
     const geracao=++geracaoPanorama;const filtros=Object.fromEntries(Object.entries(filtrosPanorama).filter(([,v])=>v));
     if (periodo.de > periodo.ate) [periodo.de, periodo.ate] = [periodo.ate, periodo.de];
     campoDe.value = periodo.de;
     campoAte.value = periodo.ate;
+    mostraMeses();
 
     const painel = document.getElementById('painel');
     painel.innerHTML = '<p class="carregando">Carregando indicadores da frota…</p>';
