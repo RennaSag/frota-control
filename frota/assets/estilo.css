@@ -3051,6 +3051,12 @@ body.sem-internet .faixa-offline {
   .cabecalho-lancamentos .coluna-valor { padding-right:5px; }
 }
 .valor-lancamento .registro-hora { flex-basis:100%; margin-top:3px; }
+/* Celular: o bloco do valor não pode ocupar a largura do texto "Cadastrado em…",
+   senão esmaga a coluna da descrição (letras quebrando uma a uma). */
+@media (max-width: 640px) {
+  .item-lancamento-moderno .valor-lancamento { flex-shrink:1; min-width:0; max-width:46%; }
+  .item-lancamento-moderno .info-lancamento { min-width:45%; }
+}
 .form-bloco { border:1px solid var(--borda); border-radius:var(--raio); padding:20px; background:var(--superficie); }
 .form-bloco h2 { font-size:.95rem; margin:0 0 18px; }
 .form-bloco details { padding-top:10px; }
