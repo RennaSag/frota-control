@@ -3695,3 +3695,15 @@ button:focus-visible, summary:focus-visible { outline:3px solid var(--primaria);
   .titulo-secao h1 { font-size:1.25rem; }
   .titulo-secao h1 + p { font-size:.85rem; }
 }
+
+/* Títulos de seção/cartão dentro das abas: um só tamanho em todo o sistema
+   (antes alguns ficavam no padrão do navegador, maiores que o título da página). */
+#conteudo h2 { font-size:1.05rem; font-weight:700; line-height:1.35; letter-spacing:-0.01em; color:var(--tinta); }
+#conteudo h3 { font-size:.95rem; font-weight:700; line-height:1.35; letter-spacing:-0.01em; color:var(--tinta); }
+#conteudo h2 + p, #conteudo h3 + p { font-size:.85rem; line-height:1.5; color:var(--tinta-2); }
+#conteudo .titulo-secao h1 + p { font-size:.9rem; }
+@media (max-width:640px) {
+  #conteudo h2 { font-size:1rem; }
+  #conteudo h3 { font-size:.92rem; }
+  #conteudo .titulo-secao h1 + p { font-size:.85rem; }
+}
