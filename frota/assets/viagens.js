@@ -213,8 +213,13 @@ function formCliente(c, atualizar) {
     <details class="form-bloco form-compacto"><summary>Endereço (opcional)</summary><div class="endereco-grade">${[['cep','CEP',12],['logradouro','Rua / endereço',140],['numero','Número',20],['complemento','Complemento',90],['bairro','Bairro',80],['cidade','Cidade',80],['uf','UF',2]].map(([nome,label,max]) => `<div class="campo"><label for="c-${nome}">${label}</label><input id="c-${nome}" name="${nome}" maxlength="${max}" value="${esc(v[nome] || '')}"></div>`).join('')}</div></details>
     <div class="campo"><label for="c-obs">Observações</label><textarea id="c-obs" name="observacao" maxlength="500">${esc(v.observacao || '')}</textarea></div>
     ${c ? `<div class="campo"><label for="c-ativo">Situação</label><select id="c-ativo" name="ativo"><option value="1" ${Number(c.ativo) ? 'selected' : ''}>Ativo</option><option value="0" ${!Number(c.ativo) ? 'selected' : ''}>Arquivado · manter histórico</option></select></div>` : ''}
-    <div class="acoes fim"><button class="btn" type="button" data-cancelar>Cancelar</button><button class="btn principal" type="submit">Salvar cliente</button></div></form>`);
+    <div class="acoes fim">${c ? '<button class="btn perigo" type="button" data-excluir-cliente>Excluir</button>' : ''}<button class="btn" type="button" data-cancelar>Cancelar</button><button class="btn principal" type="submit">Salvar cliente</button></div></form>`);
   const form = elemento.querySelector('form'); form.querySelector('[data-cancelar]').onclick = fechar;
+  form.querySelector('[data-excluir-cliente]')?.addEventListener('click', async () => {
+    if (!confirm(`Deseja realmente excluir o cliente "${c.nome}"?\n\nEsta ação não poderá ser desfeita.`)) return;
+    try { await api('DELETE', 'cliente', { id: c.id }); fechar(); recado(`Cliente "${c.nome}" excluído.`); await atualizar(); }
+    catch (erro) { recado(erro.message); }
+  });
   ligaEndereco(form);
   aoEnviar(form, async (dados) => { const r=await api(c ? 'PUT' : 'POST', c ? 'cliente' : 'clientes', c ? { id: c.id } : {}, dados); fechar(); recado(r?.offline ? GUARDADO_OFFLINE : 'Cliente salvo.'); await atualizar(); });
 }

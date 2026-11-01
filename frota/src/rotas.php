@@ -101,6 +101,8 @@ function despacha(string $r, string $metodo)
             return salvaCliente();
         case 'PUT cliente':
             return salvaCliente(campoId($q['id'] ?? null, 'Cliente', true));
+        case 'DELETE cliente':
+            return excluiCliente(campoId($q['id'] ?? null, 'Cliente', true));
         case 'POST viagem-pagamento':
             return viagemComPagamento(campoId($q['id'] ?? null, 'Viagem', true));
         case 'POST viagens':

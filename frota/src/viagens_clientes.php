@@ -73,6 +73,22 @@ function salvaCliente(?int $id = null): array
     return umaLinha('SELECT * FROM clientes WHERE id = ?', [$id]);
 }
 
+function excluiCliente(int $id): array
+{
+    exigeAdmin();
+    $nome = umValor('SELECT nome FROM clientes WHERE id = ?', [$id]);
+    if ($nome === null) throw new ErroDeUso('Cliente não encontrado.', 404);
+    if ((int) umValor('SELECT COUNT(*) FROM viagens WHERE cliente_id = ?', [$id]) > 0) {
+        throw new ErroDeUso(
+            "O cliente $nome já tem viagens e não pode ser excluído sem perder esse histórico. "
+            . 'Marque-o como "Arquivado" na situação do cadastro.',
+            409
+        );
+    }
+    consulta('DELETE FROM clientes WHERE id = ?', [$id]);
+    return ['ok' => true];
+}
+
 function clienteDaViagem(array $corpo, ?int $atual = null): ?int
 {
     $nome = campoTexto($corpo['cliente_novo'] ?? null, 'Novo cliente', false, 90);

@@ -47,6 +47,7 @@ case 'PUT adm-usuario':return rotaAdmEditaUsuario(campoId(q.id??null,'Usuário',
 case 'GET clientes':return rotaClientes();
 case 'POST clientes':return salvaCliente();
 case 'PUT cliente':return salvaCliente(campoId(q.id??null,'Cliente',true));
+case 'DELETE cliente':return excluiCliente(campoId(q.id??null,'Cliente',true));
 case 'POST meu-caminhao':return rotaMeuCaminhao();
 case 'POST viagens':return viagemComCadastro();
 case 'PUT viagem':return viagemComEdicao(campoId(q.id??null,'Viagem',true));
@@ -1581,6 +1582,15 @@ async function salvaCliente(id=null){
   if(id){if(!await umValor('SELECT id FROM clientes WHERE id=?',[id]))throw new ErroDeUso('Cliente não encontrado.',404);d.atualizado_em=agora();await atualiza('clientes',id,d);}
   else{id=await insere('clientes',{...d,criado_em:instanteCadastro()});}
   return umaLinha('SELECT * FROM clientes WHERE id=?',[id]);
+}
+
+async function excluiCliente(id){
+  await exigeAdmin();
+  const nome=await umValor('SELECT nome FROM clientes WHERE id=?',[id]);
+  if(nome===null)throw new ErroDeUso('Cliente não encontrado.',404);
+  if(Number(await umValor('SELECT COUNT(*) FROM viagens WHERE cliente_id=?',[id]))>0)throw new ErroDeUso(`O cliente ${nome} já tem viagens e não pode ser excluído sem perder esse histórico. Marque-o como "Arquivado" na situação do cadastro.`,409);
+  await consulta('DELETE FROM clientes WHERE id=?',[id]);
+  return {ok:true};
 }
 
 async function clienteDaViagem(c,atual=null){
