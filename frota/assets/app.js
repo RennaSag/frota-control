@@ -479,10 +479,10 @@ function telaLogin(mensagem) {
 
 // "curto" é o nome no menu do celular, onde o espaço é pequeno.
 const ABAS_MOTORISTA = [
+  { id: 'receita', ico: 'panorama', nome: 'Panorama' },
   { id: 'meus', ico: 'lista', nome: 'Meus gastos', curto: 'Gastos' },
   { id: 'viagens', ico: 'rota', nome: 'Viagens' },
   { id: 'diarias', ico: 'calendario', nome: 'Minhas diárias', curto: 'Diárias' },
-  { id: 'receita', ico: 'receita', nome: 'Receita da empresa', curto: 'Receita' },
   { id: 'perfil', ico: 'usuario', nome: 'Perfil' },
 ];
 const ABAS_ADMIN = [
@@ -3142,7 +3142,7 @@ async function telaAjustes(alvo) {
                 <div class="avatar-usuario-ajustes">${iniciais(u.nome)}</div>
                 <div class="dados-entidade-ajustes">
                   <strong>${esc(u.nome)} ${ehProprio ? '<small style="color:var(--primaria)">(Você)</small>' : ''}</strong>
-                  <small>@${esc(u.usuario)}${u.telefone ? ` • Tel. ${esc(u.telefone)}` : ''}${u.valor_diaria_centavos
+                  <small>${esc(u.usuario)}${u.telefone ? ` • Tel. ${esc(u.telefone)}` : ''}${u.valor_diaria_centavos
                     ? ` • Diária ${dinheiro(u.valor_diaria_centavos)}` : ''}</small>
                   <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
                     <span class="badge-status ${isAdmin ? 'aberta' : 'encerrada'}">
@@ -4579,7 +4579,7 @@ async function telaReceita(alvo) {
   const atual=hoje().slice(0,7), d=new Date(Number(atual.slice(0,4)),Number(atual.slice(5,7))-2,1);
   const anterior=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
   let mes=atual, modo='linha', resposta, versao=0;
-  alvo.innerHTML=`<div class="pilha"><div class="titulo-secao"><h1>Receita da empresa</h1><p>Panorama financeiro da frota. Disponível somente para consulta.</p></div><div class="periodos-receita" role="group" aria-label="Mês da receita"><button type="button" class="btn" data-receita-mes="${atual}" aria-pressed="true">Mês atual · ${mesCurto(atual)}</button><button type="button" class="btn" data-receita-mes="${anterior}" aria-pressed="false">Mês anterior · ${mesCurto(anterior)}</button></div><div id="receita-painel"></div></div>`;
+  alvo.innerHTML=`<div class="pilha"><div class="titulo-secao"><h1>Panorama</h1><p>Panorama financeiro da frota. Disponível somente para consulta.</p></div><div class="periodos-receita" role="group" aria-label="Mês da receita"><button type="button" class="btn" data-receita-mes="${atual}" aria-pressed="true">Mês atual · ${mesCurto(atual)}</button><button type="button" class="btn" data-receita-mes="${anterior}" aria-pressed="false">Mês anterior · ${mesCurto(anterior)}</button></div><div id="receita-painel"></div></div>`;
   const desenha=()=>{
     const r=resposta, p=alvo.querySelector('#receita-painel');
     p.innerHTML=`<div class="pilha"><div class="card-hero-destaque"><div class="cabecalho-hero"><span class="subtitulo-hero">Receita recebida · ${mesLongo(mes)}</span><span class="tag-hero positivo">Somente leitura</span></div><div class="valor-hero positivo">${dinheiro(r.atual.entradas_centavos)}</div><div class="mini-grid-hero"><div class="item-mini-hero"><span class="rotulo">Despesas</span><span class="valor">${dinheiro(r.atual.saidas_centavos)}</span></div><div class="item-mini-hero"><span class="rotulo">Saldo do mês</span><span class="valor">${dinheiro(r.atual.saldo_centavos)}</span></div><div class="item-mini-hero"><span class="rotulo">Pendente a receber</span><span class="valor">${dinheiro(r.a_receber.a_receber_centavos)}</span><small>Todos os meses</small></div></div></div>
